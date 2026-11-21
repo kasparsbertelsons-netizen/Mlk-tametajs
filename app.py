@@ -24,15 +24,15 @@ if mode == "AD — prognozēt rāmi":
             st.stop()
         try:
             with fitz.open(stream=ad_pdf.getvalue(), filetype="pdf") as doc:
-                floor_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\\bFloor plan\\b", p.get_text("text", sort=True), re.I)]
-                roof_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\\bRoof plan\\b", p.get_text("text", sort=True), re.I)]
+                floor_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\bFloor plan\b", p.get_text("text", sort=True), re.I)]
+                roof_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\bRoof plan\b", p.get_text("text", sort=True), re.I)]
                 if not floor_pages:
                     st.error("Nav atrasta atpazīstama grīdas plāna lapa.")
                     st.stop()
                 page_no, floor_text = max(floor_pages, key=lambda item: len(item[1]))
                 def dimension_candidates(txt):
                     # Standalone millimetre dimensions, excluding decimals, room areas and window sizes.
-                    return [int(m.group()) for m in re.finditer(r"(?<![\\d.,x×])\\d{4,5}(?![\\d.,x×])", txt)]
+                    return [int(m.group()) for m in re.finditer(r"(?<![\d.,x×])\d{4,5}(?![\d.,x×])", txt)]
                 candidates = dimension_candidates(floor_text)
                 roof_candidates = dimension_candidates(max(roof_pages, key=lambda item: len(item[1]))[1]) if roof_pages else []
                 # The Rebel module outer length is the largest plausible main floor dimension.
