@@ -33,6 +33,28 @@ if pdf:
                 st.caption("Aprēķins no PDF specifikācijas tabulas, bez atgriezumiem. Pārbaudi pret rasējumu.")
             else:
                 st.info("Šajā PDF netika atrasta atbalstīta līmsiju specifikācijas tabula.")
+            st.subheader("Rāmja sijas no PDF grafikas — eksperimentāls")
+            import fitz
+            from src.frame_vectors import detect_beams, compare_to_schedule
+            with fitz.open(stream=pdf.getvalue(), filetype="pdf") as doc:
+                graphic = []
+                for page_index, page in enumerate(doc):
+                    if "Structural Frame" not in data["pages"][page_index]["text"]:
+                        continue
+                    graphic.extend([{**beam, "page": page_index + 1}
+                                    for beam in detect_beams(page, drawing_scale=40)])
+            st.caption("Atpazīšana pēc TR-128 zelta krāsas vektoru kontūrām; mērogs 1:40. Citiem projektiem jākalibrē.")
+            st.metric("Grafiski atrastie siju kandidāti", len(graphic))
+            if graphic:
+                st.dataframe(graphic, hide_index=True, use_container_width=True)
+            if graphic and beams:
+                comparison = compare_to_schedule(graphic, beams)
+                st.metric("Ar specifikāciju sakrītošie elementi", len(comparison["matched"]))
+                if comparison["unmatched_graphics"] or comparison["unmatched_schedule"]:
+                    st.warning("Daļa elementu nesakrīt ar specifikāciju; nepieciešama pārbaude.")
+                else:
+                    st.success("Visi grafiski atpazītie elementi sakrīt ar PDF specifikāciju (pie pielaidēm).")
+            st.warning("Augstums 240 mm no 2D grafikas nav nosakāms: to var iegūt tikai no specifikācijas vai konstrukcijas datiem.")
             st.warning("Šie ir PDF teksta fragmenti, nevis gatava materiālu tāme. Pārbaudi tos rasējumā. Siju skaitu, šķērsgriezumus un garumus programma vēl nenosaka.")
             with st.expander("Pārbaudīt nolasīto tekstu pa lapām"):
                 for page in data["pages"]:
