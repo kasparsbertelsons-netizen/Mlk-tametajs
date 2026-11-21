@@ -19,6 +19,20 @@ if pdf:
                 st.dataframe(data["mentions"], hide_index=True, use_container_width=True)
             else:
                 st.warning("Tekstā nav atrastas atpazīstamas GL, koka karkasa vai CLT norādes. Iespējams, rasējums ir attēls.")
+
+            from src.frame_schedule import parse_beams, summarize
+            beams = parse_beams([page["text"] for page in data["pages"]])
+            st.subheader("Grīdas rāmja līmsiju specifikācija")
+            if beams:
+                st.dataframe([beam.to_dict() for beam in beams], hide_index=True, use_container_width=True)
+                totals = summarize(beams)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Pozīcijas", totals["positions"])
+                c2.metric("Līmsijas", totals["pieces"])
+                c3.metric("Kokmateriāli", f'{totals["volume_m3"]:.3f} m³')
+                st.caption("Aprēķins no PDF specifikācijas tabulas, bez atgriezumiem. Pārbaudi pret rasējumu.")
+            else:
+                st.info("Šajā PDF netika atrasta atbalstīta līmsiju specifikācijas tabula.")
             st.warning("Šie ir PDF teksta fragmenti, nevis gatava materiālu tāme. Pārbaudi tos rasējumā. Siju skaitu, šķērsgriezumus un garumus programma vēl nenosaka.")
             with st.expander("Pārbaudīt nolasīto tekstu pa lapām"):
                 for page in data["pages"]:
