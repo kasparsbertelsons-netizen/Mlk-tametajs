@@ -31,6 +31,14 @@ if pdf:
                 c2.metric("Līmsijas", totals["pieces"])
                 c3.metric("Kokmateriāli", f'{totals["volume_m3"]:.3f} m³')
                 st.caption("Aprēķins no PDF specifikācijas tabulas, bez atgriezumiem. Pārbaudi pret rasējumu.")
+                import csv
+                import io
+                buffer = io.StringIO()
+                writer = csv.writer(buffer, delimiter=";")
+                writer.writerow(["Nr", "Platums_mm", "Augstums_mm", "Garums_mm", "Gabali", "Apjoms_m3", "PDF_lapa"])
+                for beam in beams:
+                    writer.writerow([beam.number, beam.width_mm, beam.height_mm, beam.length_mm, beam.count, f"{beam.volume_m3:.6f}", beam.page])
+                st.download_button("Lejupielādēt līmsiju specifikāciju (CSV Excel)", "\ufeff" + buffer.getvalue(), file_name="MLK_limsiju_specifikacija.csv", mime="text/csv")
             else:
                 st.info("Šajā PDF netika atrasta atbalstīta līmsiju specifikācijas tabula.")
             st.subheader("Rāmja sijas no PDF grafikas — eksperimentāls")
@@ -55,7 +63,7 @@ if pdf:
                 else:
                     st.success("Visi grafiski atpazītie elementi sakrīt ar PDF specifikāciju (pie pielaidēm).")
             st.warning("Augstums 240 mm no 2D grafikas nav nosakāms: to var iegūt tikai no specifikācijas vai konstrukcijas datiem.")
-            st.warning("Šie ir PDF teksta fragmenti, nevis gatava materiālu tāme. Pārbaudi tos rasējumā. Siju skaitu, šķērsgriezumus un garumus programma vēl nenosaka.")
+            st.info("Siju skaits, šķērsgriezumi un garumi ir nolasīti no tabulas; grafiskā atpazīšana ir eksperimentāla. Rezultātu pārbaudi pret rasējumu.")
             with st.expander("Pārbaudīt nolasīto tekstu pa lapām"):
                 for page in data["pages"]:
                     st.text_area(f"Lapa {page['page']}", page["text"][:12000], height=140, key=f"page_{page['page']}")
