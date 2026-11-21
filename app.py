@@ -24,25 +24,25 @@ if mode == "AD — prognozēt rāmi":
             st.stop()
         try:
             with fitz.open(stream=ad_pdf.getvalue(), filetype="pdf") as doc:
-                floor_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if "Floor plan" in p.get_text("text", sort=True)]
-                roof_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if "Roof plan" in p.get_text("text", sort=True)]
+                floor_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\\bFloor plan\\b", p.get_text("text", sort=True), re.I)]
+                roof_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\\bRoof plan\\b", p.get_text("text", sort=True), re.I)]
                 if not floor_pages:
-                    st.error("PDF nav atpazīts 'Floor plan' rasējums. Nevar droši noteikt moduļa ārējos izmērus; aprēķins netiek izdomāts.")
+                    st.error("Nav atrasta atpazīstama grīdas plāna lapa.")
                     st.stop()
                 page_no, floor_text = floor_pages[0]
                 def dimension_candidates(txt):
-                    return [int(v) for v in re.findall(r"(?<![\\d.])(?:[3-9]\\d{3}|1\\d{4})(?![\\d.])", txt)]
+                    # Standalone millimetre dimensions, excluding decimals, room areas and window sizes.
+                    return [int(m.group()) for m in re.finditer(r"(?<![\\d.,x×])\\d{4,5}(?![\\d.,x×])", txt)]
                 candidates = dimension_candidates(floor_text)
-                # The outer length is normally the largest dimension in the floor-plan chain.
-                length = max(candidates) if candidates else None
-                # Cross-check the width using roof plan where possible, otherwise floor plan.
                 roof_candidates = dimension_candidates(roof_pages[0][1]) if roof_pages else []
-                widths = [v for v in roof_candidates if 3400 <= v <= 4200]
-                if not widths:
-                    widths = [v for v in candidates if 3400 <= v <= 4200]
+                # The Rebel module outer length is the largest plausible main floor dimension.
+                long_values = [v for v in candidates if 6000 <= v <= 20000]
+                length = max(long_values) if long_values else None
+                # For a Rebel module, select the standard outer width found on the floor or roof plan.
+                widths = [v for v in candidates + roof_candidates if v in (3500, 4000)]
                 width = max(set(widths), key=widths.count) if widths else None
                 if not length or not width or length <= width:
-                    st.error("No arhitektūras rasējuma nevarēja droši iegūt garumu un platumu. Nepieciešama precīzāka rasējuma atpazīšana.")
+                    st.error("No plāna nav droši nosakāmi Rebel moduļa gabarīti. Aprēķins netiek veikts ar izdomātiem izmēriem.")
                     st.stop()
                 # Estimate from known Rebel rules, without asking the user for beam dimensions.
                 clear_span = width - 400
