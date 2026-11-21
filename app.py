@@ -29,17 +29,17 @@ if mode == "AD — prognozēt rāmi":
                 if not floor_pages:
                     st.error("Nav atrasta atpazīstama grīdas plāna lapa.")
                     st.stop()
-                page_no, floor_text = floor_pages[0]
+                page_no, floor_text = max(floor_pages, key=lambda item: len(item[1]))
                 def dimension_candidates(txt):
                     # Standalone millimetre dimensions, excluding decimals, room areas and window sizes.
                     return [int(m.group()) for m in re.finditer(r"(?<![\\d.,x×])\\d{4,5}(?![\\d.,x×])", txt)]
                 candidates = dimension_candidates(floor_text)
-                roof_candidates = dimension_candidates(roof_pages[0][1]) if roof_pages else []
+                roof_candidates = dimension_candidates(max(roof_pages, key=lambda item: len(item[1]))[1]) if roof_pages else []
                 # The Rebel module outer length is the largest plausible main floor dimension.
-                long_values = [v for v in candidates if 6000 <= v <= 20000]
+                long_values = [v for v in roof_candidates + candidates if 6000 <= v <= 20000]
                 length = max(long_values) if long_values else None
                 # For a Rebel module, select the standard outer width found on the floor or roof plan.
-                widths = [v for v in candidates + roof_candidates if v in (3500, 4000)]
+                widths = [v for v in roof_candidates + candidates if v in (3500, 4000)]
                 width = max(set(widths), key=widths.count) if widths else None
                 if not length or not width or length <= width:
                     st.error("No plāna nav droši nosakāmi Rebel moduļa gabarīti. Aprēķins netiek veikts ar izdomātiem izmēriem.")
