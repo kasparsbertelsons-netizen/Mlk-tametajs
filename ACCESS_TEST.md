@@ -1,0 +1,1 @@
+GitHub rakstīšanas piekļuves tests.
