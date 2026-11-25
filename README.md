@@ -12,6 +12,8 @@ streamlit run app.py
 Testi: `python -m unittest discover -s tests`.
 
 ## Kas ir gatavs
+AD režīms: provizoriska moduļa **grīdas pamatrāmja** (bez pastiprinājumiem) aprēķins no lietotāja apstiprinātiem L un W; skat. `docs/FLOOR_FRAME_CORE.md`. PD režīms nolasa siju specifikācijas tabulu.
+
 Manuāli apstiprinātas sienas ģeometrijas aprēķins: neto laukums, aptuvens statņu skaits, aptuvens izolācijas tilpums. PDF analīze, cenas, Excel eksports, lietotāju autentifikācija un publiska tīmekļa adrese vēl nav izveidota.
 
 ## Drošība
