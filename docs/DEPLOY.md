@@ -10,3 +10,5 @@ Programma ir Python/Streamlit; **GitHub Pages nevar palaist PDF analīzi**.
 6. Pārbaudi: 9 rindas, 25 līmsijas, 2.049191 m³; grafiskie kandidāti 25 un 25 sakritības.
 
 **Datu aizsardzība:** privāts GitHub repozitorijs pats par sevi **nenozīmē privātu Streamlit mājaslapu**. Pirms klienta rasējumu augšupielādes pārbaudi lietotnes piekļuves iestatījumus. Ja nav iespējams ierobežot piekļuvi, neaugšupielādē konfidenciālus failus. Lietotnes kodā pašlaik nav individuālas autentifikācijas.
+
+**Pilnas ēkas tāme (Issue #14):** publiski izvietotajā lietotnē izmantojiet TIKAI sintētisku DEMO projektu un DEMO šablonus. Reālus MLK cenu failus, normas un projektus (arī saglabātos JSON) izmantojiet tikai lokālajā versijā uz `127.0.0.1` (`docs/LOCAL_WINDOWS.md`). Izvietošanai vajadzīga atkarība `openpyxl` (iekļauta `requirements.txt`).

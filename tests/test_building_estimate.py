@@ -12,7 +12,7 @@ from streamlit.testing.v1 import AppTest
 from src.building_demo import demo_frame_project, demo_project
 from src.building_estimate import (
     G_EXT, G_FLOOR, G_INT, G_MANUAL, G_OPEN, G_ROOF, G_TERRACE, NOT_FINAL, ST_DUP, ST_MISSING, empty_project, estimate,
-    EXPORT_HEADER, export_rows,
+    EXPORT_HEADER, export_rows, set_price,
 )
 from src.floor_frame import calculate_module
 
@@ -235,19 +235,17 @@ class TestValidation(unittest.TestCase):
 
 
 class TestPricesAndExport(unittest.TestCase):
-    def test_prices_and_hours_only_when_entered(self):
+    def test_prices_only_when_entered(self):
         p = demo_frame_project()
         r = one(estimate(p), G_EXT, "Vēja plēve")
         self.assertIsNone(r.cost)
-        p["prices"] = {r.price_key(): {"price": 2.0, "hours": 3.5}}
+        set_price(p, r.row_id, 2.0, r.unit, r.article, r.spec)
         e = estimate(p)
         r = one(e, G_EXT, "Vēja plēve")
         self.assertAlmostEqual(r.cost, r.order_qty * 2.0, 9)
         s = {x["group"]: x for x in e.summary()}[G_EXT]
         self.assertEqual(s["priced_rows"], 1)
-        self.assertEqual(s["hours"], 3.5)
         self.assertGreater(s["unpriced_rows"], 0)
-
     def test_csv_complete_demo(self):
         e = estimate(demo_frame_project())
         rows = export_rows("DEMO", e)
@@ -298,7 +296,7 @@ class TestUi(unittest.TestCase):
         self.assertFalse(at.exception)
         values = {m.label: m.value for m in at.metric}
         self.assertEqual(values["Koksne kopā (neto)"], "32.563 m³")
-        self.assertEqual(len(at.get("download_button")), 1)
+        self.assertTrue(any("Excel" in b.proto.label for b in at.get("download_button")))
         self.assertTrue(any("PROVIZORISKA" in w.value for w in at.warning))
         self.assertTrue(any("NAV IEKĻAUTS" in e.value for e in at.error))
         self.assertFalse(any("NEPILNA TĀME" in w.value for w in at.warning))
@@ -325,8 +323,5 @@ class TestUi(unittest.TestCase):
     def test_demo_is_synthetic(self):
         p = demo_project()
         self.assertIn("DEMO", p["name"])
-        self.assertEqual(p["prices"], {})
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertTrue(p["is_demo"])
+        self.assertTrue(all(c["source"].startswith("DEMO") for c in p["catalog"]))

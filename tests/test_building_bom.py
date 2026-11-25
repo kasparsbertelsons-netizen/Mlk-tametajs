@@ -12,13 +12,27 @@ from streamlit.testing.v1 import AppTest
 
 from src.building_demo import demo_frame_project, demo_project
 from src.building_estimate import (
-    EXPORT_HEADER, G_ELEC, G_EQUIP, G_EXT, G_FASTEN, G_FLOOR, G_INT, G_MANUAL, G_ROOF, G_VENT, MANDATORY_GROUPS, ST_MISSING,
+    confirm_review, set_price, EXPORT_HEADER, G_ELEC, G_EQUIP, G_EXT, G_FASTEN, G_FLOOR, G_INT, G_MANUAL, G_ROOF, G_VENT, MANDATORY_GROUPS, ST_MISSING,
     ST_UNAPPROVED, Row, default_layers, empty_project, estimate, export_rows,
 )
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 ROOF = 120 / math.cos(math.radians(20))
 EXT_NET, INT_NET = 116.7, 20.61
+
+
+def bare_demo():
+    """CLT demo BEZ cenām, darba un cenojuma (veco budžeta testu pamats): tikai ģeometrija, recepšu rindas un katalogs bez cenām."""
+    p = demo_project()
+    p["prices"] = {}
+    for c in p["catalog"]:
+        c["unit_price"] = None
+    p["labour"] = {"rate_eur_h": None, "operations": []}
+    p["pricing"] = {"overhead_pct": None, "method": None, "markup_pct": None, "margin_pct": None, "vat_enabled": False, "vat_pct": None}
+    p["other_costs"] = [{"id": "a", "name": "MEP darbs un montāža", "category": "Ārpakalpojumi", "group": None, "amount_eur": None},
+                        {"id": "b", "name": "Transports", "category": "Transports", "group": None, "amount_eur": None},
+                        {"id": "c", "name": "Montāža objektā", "category": "Montāža", "group": None, "amount_eur": None}]
+    return p
 
 
 def one(est, group, text):
@@ -142,15 +156,13 @@ class TestBomDataModel(unittest.TestCase):
         self.assertEqual(one(estimate(p), G_FASTEN, "Skrūves").stage, "lietotāja posms X")
 
     def test_unknown_is_not_zero_in_csv(self):
-        rows = export_rows("DEMO", estimate(demo_project()))
+        rows = export_rows("DEMO", estimate(bare_demo()))
         head = rows.index(EXPORT_HEADER)
         price_col, cost_col = EXPORT_HEADER.index("Vienības_cena_EUR"), EXPORT_HEADER.index("Izmaksas_EUR")
         data = rows[head + 1:]
         unpriced = [r for r in data if len(r) == len(EXPORT_HEADER) and r[price_col] == "" and r[3] != ""]
         self.assertGreater(len(unpriced), 20)
         self.assertTrue(all(r[cost_col] == "" for r in unpriced))                          # nav «0,00»
-
-
 class TestRecipes(unittest.TestCase):
     def test_norm_times_driver_with_pack_rounding_and_catalog_price(self):
         e = estimate(demo_project())
@@ -201,10 +213,9 @@ class TestRecipes(unittest.TestCase):
         r = one(estimate(p), G_FASTEN, "Skrūve X")
         self.assertEqual((r.spec, r.unit, r.module, r.status, r.order_qty), ("spec X", "gab.", "M1", "ievadīts", 30))
         self.assertAlmostEqual(r.cost, 30 * 0.5, 9)
-        p["prices"] = {r.price_key(): {"price": 2.0, "hours": 1.5}}
+        set_price(p, r.row_id, 2.0, r.unit, r.article, r.spec)
         r = one(estimate(p), G_FASTEN, "Skrūve X")
         self.assertAlmostEqual(r.cost, 60.0, 9)
-        self.assertEqual(r.hours, 1.5)
 
     def test_catalog_price_with_other_unit_is_not_applied(self):
         p = empty_project()
@@ -250,32 +261,34 @@ class TestCoverageAndBudget(unittest.TestCase):
         self.assertTrue(any(len(r) > 1 and r[1] == G_VENT for r in export_rows("x", e)))     # CSV norāda nepārklāto grupu
 
     def test_budget_sums_only_entered_prices_and_other_costs(self):
-        p = demo_project()
+        p = bare_demo()
         e0 = estimate(p)
         wind = one(e0, G_EXT, "Vēja membrāna")
         ext = one(e0, G_EXT, "CLT ārsienu paneļi")
-        p["prices"] = {wind.price_key(): {"price": 2.0, "hours": 4.0}, ext.price_key(): {"price": 500.0, "hours": 10.0}}
+        set_price(p, wind.row_id, 2.0, wind.unit, wind.article, wind.spec)
+        set_price(p, ext.row_id, 500.0, ext.unit, ext.article, ext.spec)
         p["other_costs"][1]["amount_eur"] = 1200.0                                           # transports
         b = estimate(p).budget()
-        materials = 96.0 + wind.order_qty * 2.0 + ext.order_qty * 500.0                       # + skrūves no kataloga (96)
+        materials = wind.order_qty * 2.0 + ext.order_qty * 500.0
         self.assertAlmostEqual(b["materials"], materials, 6)
         self.assertAlmostEqual(b["total"], materials + 1200.0, 6)
-        self.assertEqual(b["hours"], 14.0)
         self.assertIn("Transports", [n for n, _a in b["other_entered"]])
         self.assertIn("MEP darbs un montāža", b["other_missing"])
         self.assertTrue(b["incomplete"])
-        self.assertEqual(b["priced_rows"], 3)
-
+        self.assertEqual(b["priced_rows"], 2)
     def test_budget_marked_complete_only_when_everything_priced(self):
         p = demo_project()
-        e = estimate(p)
-        p["prices"] = {r.price_key(): {"price": 1.0, "hours": None} for r in e.rows if r.qty is not None}
-        for item in p["other_costs"]:
-            item["amount_eur"] = 10.0
         b = estimate(p).budget()
-        self.assertFalse(b["incomplete"])
-        self.assertAlmostEqual(b["other"], 50.0, 9)
-
+        self.assertFalse(b["incomplete"])                                                    # pilnībā cenots demo
+        self.assertEqual(b["reasons"], [])
+        victim = next(r for r in estimate(p).rows if r.material == "Jumta segums")
+        for c in p["catalog"]:
+            if c["article"] == victim.article:
+                c["unit_price"] = None                                                       # cena izņemta → NEPILNS, nevis 0
+        b2 = estimate(p).budget()
+        self.assertTrue(b2["incomplete"])
+        self.assertEqual(b2["unpriced_rows"], 1)
+        self.assertTrue(any("bez cenas" in r for r in b2["reasons"]))
     def test_negative_other_cost_is_error(self):
         p = demo_project()
         p["other_costs"][0]["amount_eur"] = -5
@@ -284,25 +297,25 @@ class TestCoverageAndBudget(unittest.TestCase):
     def test_procurement_status_requires_review_and_coverage(self):
         p = demo_project()
         self.assertIn("nav atbildīgās personas pārbaudes", estimate(p).procurement_status)
-        p["review"] = {"reviewer": "Jānis", "confirmed": True}
+        confirm_review(p, "Jānis")
         status = estimate(p).procurement_status
         self.assertIn("Jānis", status)
         self.assertIn("provizoriski", status)
         self.assertNotIn("NAV GATAVS", status)
-        p["review"] = {"reviewer": "", "confirmed": True}                                      # bez vārda neder
+        p["review"] = {"reviewer": "", "confirmed": True, "fp": None}                          # bez vārda neder
         self.assertIn("NAV GATAVS", estimate(p).procurement_status)
-        p["review"] = {"reviewer": "Jānis", "confirmed": True}
-        p["recipes"] = []                                                                      # trūkst obligāto grupu
+        confirm_review(p, "Jānis")
+        p["recipes"] = []                                                                      # datu izmaiņa atceļ pārbaudi
+        self.assertIn("apstiprinājums atcelts", estimate(p).procurement_status)
+        confirm_review(p, "Jānis")                                                             # jauna pārbaude bez obligāto grupu → nepilns
         self.assertIn("nepilns pārklājums", estimate(p).procurement_status)
-
     def test_csv_contains_budget_stage_and_procurement(self):
-        rows = export_rows("DEMO", estimate(demo_project()))
+        rows = export_rows("DEMO", estimate(bare_demo()))
         text = "\n".join(";".join(map(str, r)) for r in rows)
         for needle in ("BUDŽETA KOPSAVILKUMS", "AD budžeta stadija", "NAV GATAVS IEPIRKUMAM", "BEZ CENAS", "GRUPU PĀRKLĀJUMS",
-                       "CLT ārsienu paneļi", "DEMO-SKR-6x80", "Alternatīvā"):
+                       "CLT ārsienu paneļi", "DEMO-SKR-6x80", "Alternatīvā", "Rindas_ID"):
             self.assertIn(needle, text)
-        self.assertIn("NEPILNS", text)
-
+        self.assertIn("NEPILNA", text)
 
 def building_app():
     at = AppTest.from_file(APP, default_timeout=90).run()
@@ -318,11 +331,11 @@ class TestUiClt(unittest.TestCase):
         values = {m.label: m.value for m in at.metric}
         expected = (3.92016 + EXT_NET * .1 + INT_NET * .08 + ROOF * .12)
         self.assertEqual(values["Koksne kopā (neto)"], f"{expected:.3f} m³")
-        self.assertIn("NEPILNS", values["Kopā ar citām izmaksām"])
+        self.assertEqual(values["Pašizmaksa"], "74607.43 EUR")
+        self.assertEqual(values["Pārdošanas cena bez PVN"], "85798.54 EUR")
         self.assertTrue(any("Iepirkuma gatavība" in i.value and "NAV GATAVS" in i.value for i in at.info))
         self.assertEqual(at.session_state["bp_project"]["construction"], "clt")
-        self.assertTrue(any("Budžets ir NEPILNS" in w.value for w in at.warning))
-
+        self.assertFalse(any("Budžets ir NEPILNS" in w.value for w in at.warning))
     def test_switching_construction_resets_layers_with_notice(self):
         at = building_app()
         at.button(key="bp_demo").click().run()
@@ -339,8 +352,6 @@ class TestUiClt(unittest.TestCase):
         self.assertFalse(at.exception)
         self.assertTrue(any("NEPILNA TĀME" in w.value for w in at.warning))
         at.button(key="bp_demo").click().run()
-        self.assertEqual(len(at.get("download_button")), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        labels = [b.proto.label for b in at.get("download_button")]
+        self.assertTrue(any("Excel" in l for l in labels))
+        self.assertTrue(any("projektu" in l.lower() for l in labels))
