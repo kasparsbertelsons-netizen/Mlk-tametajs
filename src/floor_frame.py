@@ -17,9 +17,16 @@ Apstiprinātie noteikumi (ChatGPT, Issue #2 / #4):
 Aprēķins ir provizorisks, nav konstruktora specifikācija, un ietver TIKAI
 pamatrāmi (bez 150×240 pastiprinājumiem un 45×240 īsajām starpsijām).
 """
+import dataclasses
 from dataclasses import dataclass, field
+from fractions import Fraction
 from numbers import Integral, Real
 from math import isfinite
+
+from src.reinforcement import (
+    KIND_ADD, KIND_REPLACE, RF_HEIGHT_MM, RF_SOURCE_USER, RF_WIDTH_MM, Conflict, ReinforcementError,
+    format_axis, parse_axis, plan_layout,
+)
 
 PERIMETER_WIDTH_MM = 200
 BEAM_HEIGHT_MM = 240
@@ -35,6 +42,18 @@ SCOPE_NOTE = (
     "provizorisks, nevis konstruktora specifikācija."
 )
 
+SCOPE_NOTE_REINFORCED = (
+    "Rezultāts ietver pamatrāmi (2 garās, 2 gala un regulārās šķērssijas) un LIETOTĀJA manuāli norādītos un apstiprinātos "
+    "150×240 pastiprinājumus. Automātiska pastiprinājumu noteikšana un 45×240 īsās starpsijas NAV realizētas un NAV "
+    "ieskaitītas, tāpēc kopējais apjoms var būt par mazu. Aprēķins ir provizorisks, nevis konstruktora specifikācija."
+)
+VOLUME_SCOPE_BASE = ("Pamatrāmis: perimetra, gala un regulārās šķērssijas; BEZ 150×240 pastiprinājumiem un BEZ 45×240 "
+                     "īsajām starpsijām")
+VOLUME_SCOPE_REINFORCED = ("Pamatrāmis + LIETOTĀJA manuāli norādītie 150×240 pastiprinājumi; BEZ automātiski noteiktiem "
+                           "pastiprinājumiem, BEZ 45×240 īsajām starpsijām un BEZ zāģēšanas atgriezumiem")
+
+ELEMENT_RF_REPLACE = "Pastiprinājums 150×240 (aizvieto regulāro)"
+ELEMENT_RF_ADD = "Pastiprinājums 150×240 (papildus)"
 ELEMENT_LONG = "Garās perimetra sijas"
 ELEMENT_END = "Gala sijas"
 ELEMENT_CROSS = "Regulārās šķērssijas"
@@ -97,8 +116,35 @@ class ModuleResult:
     cross_count: int
     remainder_mm: int               # pēdējā atstarpe, bez pārdalīšanas
     rows: tuple
-    cross_positions: tuple          # ((sākums, beigas), …) mm no moduļa gala
+    cross_positions: tuple          # ((sākums, beigas), …) mm no moduļa gala: PAMATRĀMJA regulārās šķērssijas
     warnings: tuple = field(default_factory=tuple)
+    reinforcements: tuple = ()      # Placement: lietotāja norādītie 150×240 pastiprinājumi (izvēles)
+    members: tuple = ()             # Member: gala sijas + atlikušās regulārās + pastiprinājumi, sakārtoti pa garumu
+    gaps: tuple = ()                # Gap: brīvās atstarpes starp blakus esošām sijām (arī ar pastiprinājumiem)
+    reinforcement_source: str = ""
+
+    @property
+    def replaced_count(self) -> int:
+        return sum(1 for r in self.reinforcements if r.mode == "replace")
+
+    @property
+    def added_count(self) -> int:
+        return sum(1 for r in self.reinforcements if r.mode == "add")
+
+    @property
+    def reinforcement_count(self) -> int:
+        return len(self.reinforcements)
+
+    @property
+    def regular_count(self) -> int:
+        """Atlikušās regulārās šķērssijas (pamatrāmja skaits mīnus aizvietotās)."""
+        return self.cross_count - self.replaced_count
+
+    @property
+    def regular_axes(self) -> tuple:
+        """Pamatrāmja regulāro šķērssiju asis (centri), mm no moduļa ārējā gala; precīzi (Fraction)."""
+        half = Fraction(self.params.cross_width_mm, 2)
+        return tuple(Fraction(start) + half for start, _end in self.cross_positions)
 
     @property
     def total_pieces(self) -> int:
@@ -119,9 +165,21 @@ class ModuleResult:
     @property
     def notes(self) -> tuple:
         if self.params_default:
-            return (f"Perimetra sija {self.params.perimeter_width_mm}×"
-                    f"{self.params.beam_height_mm} mm ir NOKLUSĒJUMS, nav nolasīts no rasējuma.",)
-        return ("Izmantoti lietotāja apstiprināti nestandarta parametri.",)
+            notes = (f"Perimetra sija {self.params.perimeter_width_mm}×"
+                     f"{self.params.beam_height_mm} mm ir NOKLUSĒJUMS, nav nolasīts no rasējuma.",)
+        else:
+            notes = ("Izmantoti lietotāja apstiprināti nestandarta parametri.",)
+        if self.reinforcements:
+            notes += (f"Pastiprinājumi ({self.reinforcement_count}) ir LIETOTĀJA manuāli norādīti un apstiprināti, "
+                      "nav nolasīti no PDF; automātiska pastiprinājumu noteikšana un 45×240 īsās starpsijas nav realizētas.",)
+        else:
+            notes += ("Pastiprinājumi nav norādīti: tas ir pamatrāmja aprēķins, nevis pierādījums, ka pastiprinājumi "
+                      "nav vajadzīgi.",)
+        return notes
+
+    @property
+    def volume_scope(self) -> str:
+        return VOLUME_SCOPE_REINFORCED if self.reinforcements else VOLUME_SCOPE_BASE
 
 
 @dataclass(frozen=True)
@@ -132,6 +190,12 @@ class ModuleSpec:
     source: str = "Ievadīts manuāli"
     params: FrameParams = DEFAULT_PARAMS
     nonstandard_confirmed: bool = False
+    reinforcements: tuple = ()
+    reinforcement_source: str = RF_SOURCE_USER
+
+
+def scope_note(with_reinforcements: bool) -> str:
+    return SCOPE_NOTE_REINFORCED if with_reinforcements else SCOPE_NOTE
 
 
 def _mm(value, label):
@@ -161,10 +225,13 @@ def _validated_params(params):
 
 
 def calculate_module(length_mm, width_mm, *, name="Modulis", source="Ievadīts manuāli",
-                     params=DEFAULT_PARAMS, nonstandard_confirmed=False) -> ModuleResult:
-    """Viena taisnstūra moduļa pamatrāmis no APSTIPRINĀTIEM L un W (mm).
+                     params=DEFAULT_PARAMS, nonstandard_confirmed=False, reinforcements=(),
+                     reinforcement_source=RF_SOURCE_USER) -> ModuleResult:
+    """Viena taisnstūra moduļa pamatrāmis no APSTIPRINĀTIEM L un W (mm) + izvēles LIETOTĀJA pastiprinājumi.
 
-    Izmet ValueError nederīgiem izmēriem un nestandarta parametriem bez apstiprinājuma.
+    `reinforcements`: pastiprinājumu asis (mm no moduļa ārējā gala, sijas CENTRS; skat. `src/reinforcement.py`);
+    tukšs = tikai pamatrāmis (rezultāts nemainīts). Izmet ValueError nederīgiem izmēriem/asīm un nestandarta
+    parametriem bez apstiprinājuma, un `ReinforcementError` (ValueError apakšklase) pozīciju konfliktiem.
     """
     length = _mm(length_mm, "Garums L")
     width = _mm(width_mm, "Platums W")
@@ -189,13 +256,32 @@ def calculate_module(length_mm, width_mm, *, name="Modulis", source="Ievadīts m
     gap, cross_w = params.clear_gap_mm, params.cross_width_mm
     positions = tuple((p + gap + k * pitch, p + gap + k * pitch + cross_w) for k in range(count))
 
+    axes = [parse_axis(value) for value in reinforcements]
+    if axes and params.beam_height_mm != RF_HEIGHT_MM:
+        raise ReinforcementError([Conflict(
+            "UNSUPPORTED_PARAMS",
+            f"Pastiprinājuma recepte {RF_WIDTH_MM}×{RF_HEIGHT_MM} ir apstiprināta tikai rāmja augstumam {RF_HEIGHT_MM} mm; "
+            f"rāmja augstums {params.beam_height_mm} mm netiek interpretēts automātiski.")])
+    placements, members, gaps = plan_layout(length, p, cross_w, [start for start, _end in positions], axes)
+    replaced = sum(1 for pl in placements if pl.mode == "replace")
+    added = len(placements) - replaced
+
     basis = "Noklusējums" if is_default else "Apstiprināti nestandarta parametri"
-    rows = (
+    rows = [
         BeamRow(ELEMENT_LONG, p, params.beam_height_mm, length, 2, f"{basis}: visā garumā L"),
         BeamRow(ELEMENT_END, p, params.beam_height_mm, span, 2, f"{basis}: W − 2 × perimetrs"),
-        BeamRow(ELEMENT_CROSS, cross_w, params.beam_height_mm, span, count,
-                f"{basis}: {gap} mm brīva atstarpe, {pitch} mm solis; atlikums bez pārdalīšanas"),
-    )
+        BeamRow(ELEMENT_CROSS, cross_w, params.beam_height_mm, span, count - replaced,
+                f"{basis}: {gap} mm brīva atstarpe, {pitch} mm solis; atlikums bez pārdalīšanas"
+                + (f"; {replaced} aizvietota(s) ar pastiprinājumu" if replaced else "")),
+    ]
+    rf_basis = (f"{reinforcement_source}: {RF_WIDTH_MM}×{RF_HEIGHT_MM}, pilns laidums W − 2 × perimetrs")
+    if replaced:
+        rows.append(BeamRow(ELEMENT_RF_REPLACE, RF_WIDTH_MM, RF_HEIGHT_MM, span, replaced,
+                            f"{rf_basis}; AIZVIETO regulāro siju (ass precīzi sakrīt)"))
+    if added:
+        rows.append(BeamRow(ELEMENT_RF_ADD, RF_WIDTH_MM, RF_HEIGHT_MM, span, added,
+                            f"{rf_basis}; PAPILDUS (regulārās sijas netiek pārbīdītas)"))
+    rows = tuple(rows)
 
     warnings = []
     if width > WIDTH_REVIEW_LIMIT_MM:
@@ -219,15 +305,49 @@ def calculate_module(length_mm, width_mm, *, name="Modulis", source="Ievadīts m
     if not is_default:
         warnings.append(FrameWarning(
             "NONSTANDARD_PARAMS", "Izmantoti nestandarta parametri (lietotāja apstiprināti)."))
+    for gap_item in gaps:
+        touches = {gap_item.left, gap_item.right} & {pl.label for pl in placements}
+        if gap_item.size == 0 and touches:
+            warnings.append(FrameWarning(
+                "REINFORCEMENT_ZERO_GAP",
+                f"Pastiprinājums {', '.join(sorted(touches))} pieskaras blakus sijai ({gap_item.left} / {gap_item.right}): "
+                "atstarpe 0 mm: jāpārbauda; nav apstiprināts kā konstruktīvi derīgs."))
 
     result = ModuleResult(
         name=name, source=source, length_mm=length, width_mm=width, params=params,
         params_default=is_default, clear_length_mm=clear, cross_count=count,
-        remainder_mm=remainder, rows=rows, cross_positions=positions, warnings=tuple(warnings))
-    problems = layout_problems(result)
+        remainder_mm=remainder, rows=rows, cross_positions=positions, warnings=tuple(warnings),
+        reinforcements=placements, members=members, gaps=gaps,
+        reinforcement_source=reinforcement_source if placements else "")
+    problems = layout_problems(result) + members_problems(result)
     if problems:  # iekšēja pretruna = kļūda kodā, nevis lietotāja datos
         raise RuntimeError("Siju novietojuma pārbaude neizdevās: " + "; ".join(problems))
     return result
+
+
+def members_problems(result: ModuleResult) -> list:
+    """Neatkarīga GALĪGĀ izkārtojuma pārbaude (ar pastiprinājumiem): robežas, nepārklāšanās, skaiti, atstarpes."""
+    problems = []
+    p = result.params.perimeter_width_mm
+    members = result.members
+    if not members or members[0].start != 0 or members[-1].end != result.length_mm:
+        problems.append("gala sijas neatrodas moduļa galos")
+    for a, b in zip(members, members[1:]):
+        if b.start < a.end:
+            problems.append(f"{a.label} un {b.label} pārklājas")
+    if [g.size for g in result.gaps] != [b.start - a.end for a, b in zip(members, members[1:])]:
+        problems.append("atstarpes neatbilst izkārtojumam")
+    regular = [m for m in members if m.kind == "regular"]
+    if len(regular) != result.regular_count:
+        problems.append("regulāro sijas skaits nesakrīt ar rindu")
+    if sum(1 for m in members if m.kind == "reinforcement_replace") != result.replaced_count:
+        problems.append("aizvietoto skaits nesakrīt")
+    if sum(1 for m in members if m.kind == "reinforcement_add") != result.added_count:
+        problems.append("papildus pastiprinājumu skaits nesakrīt")
+    for m in members:
+        if m.kind != "end" and (m.start < p or m.end > result.length_mm - p):
+            problems.append(f"{m.label} ir ārpus brīvā rāmja")
+    return problems
 
 
 def layout_problems(result: ModuleResult) -> list:
@@ -265,7 +385,11 @@ def calculate_modules(specs) -> list:
         try:
             results.append(calculate_module(
                 spec.length_mm, spec.width_mm, name=spec.name, source=spec.source,
-                params=spec.params, nonstandard_confirmed=spec.nonstandard_confirmed))
+                params=spec.params, nonstandard_confirmed=spec.nonstandard_confirmed,
+                reinforcements=spec.reinforcements, reinforcement_source=spec.reinforcement_source))
+        except ReinforcementError as error:
+            raise ReinforcementError(
+                [dataclasses.replace(c, message=f"{spec.name}: {c.message}") for c in error.conflicts]) from error
         except ValueError as error:
             raise ValueError(f"{spec.name}: {error}") from error
     return results
@@ -279,6 +403,10 @@ def summarize_modules(results) -> dict:
         "pieces": sum(r.total_pieces for r in results),
         "volume_m3": round(sum(r.total_volume_mm3 for r in results) / 1e9, 6),
         "needs_review": sum(1 for r in results if r.needs_review),
+        "regular": sum(r.regular_count for r in results),
+        "replaced": sum(r.replaced_count for r in results),
+        "added": sum(r.added_count for r in results),
+        "modules_with_reinforcements": sum(1 for r in results if r.reinforcements),
     }
 
 
@@ -289,20 +417,33 @@ def _csv_safe(text):
 
 
 EXPORT_HEADER = ["Modulis", "Elements", "b_mm", "h_mm", "L_mm", "Gab", "Apjoms_m3",
-                 "Pamatojums", "Atlikums_mm", "Japarbauda", "Avots"]
+                 "Pamatojums", "Atlikums_mm", "Japarbauda", "Avots",
+                 "Ass_no_gala_mm", "Pastiprinajuma_avots", "Apjoma_robeza"]
 
 
 def export_rows(results) -> list:
-    """CSV rindas (ar galveni) visiem moduļiem un KOPĀ rindu."""
+    """CSV rindas (ar galveni): moduļu rindas, katrs 150×240 pastiprinājums ATSEVIŠĶI (ar asi un apstiprinājuma avotu),
+    un KOPĀ rinda ar skaidru apjoma robežu."""
     results = list(results)
     rows = [EXPORT_HEADER]
     for r in results:
+        common_tail = [r.remainder_mm, "JĀ" if r.needs_review else "", _csv_safe(r.source)]
         for beam in r.rows:
-            rows.append([_csv_safe(r.name), beam.element, beam.width_mm, beam.height_mm,
-                         beam.length_mm, beam.count, f"{beam.volume_m3:.6f}", beam.basis,
-                         r.remainder_mm, "JĀ" if r.needs_review else "", _csv_safe(r.source)])
+            if beam.element in (ELEMENT_RF_REPLACE, ELEMENT_RF_ADD):
+                mode = "replace" if beam.element == ELEMENT_RF_REPLACE else "add"
+                for pl in (x for x in r.reinforcements if x.mode == mode):          # katrs pastiprinājums atsevišķi
+                    label = (f"{beam.element}, {pl.label}"
+                             + (f", aizvieto regulāro Nr. {pl.replaces}" if pl.replaces else ""))
+                    rows.append([_csv_safe(r.name), label, beam.width_mm, beam.height_mm, beam.length_mm, 1,
+                                 f"{round(beam.width_mm * beam.height_mm * beam.length_mm / 1e9, 6):.6f}", beam.basis, *common_tail,
+                                 format_axis(pl.axis), _csv_safe(r.reinforcement_source), r.volume_scope])
+                continue
+            rows.append([_csv_safe(r.name), beam.element, beam.width_mm, beam.height_mm, beam.length_mm, beam.count,
+                         f"{beam.volume_m3:.6f}", beam.basis, *common_tail, "", "", r.volume_scope])
     total = summarize_modules(results)
-    rows.append(["KOPĀ (tikai pamatrāmis)", "", "", "", "", total["pieces"],
-                 f"{total['volume_m3']:.6f}", "Provizorisks; nav konstruktora specifikācija",
-                 "", "JĀ" if total["needs_review"] else "", ""])
+    reinforced = total["modules_with_reinforcements"] > 0
+    rows.append(["KOPĀ (pamatrāmis + lietotāja pastiprinājumi)" if reinforced else "KOPĀ (tikai pamatrāmis)",
+                 "", "", "", "", total["pieces"], f"{total['volume_m3']:.6f}",
+                 "Provizorisks; nav konstruktora specifikācija", "", "JĀ" if total["needs_review"] else "", "",
+                 "", "", VOLUME_SCOPE_REINFORCED if reinforced else VOLUME_SCOPE_BASE])
     return rows
