@@ -9,10 +9,10 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from src.building_demo import demo_project
+from src.building_demo import demo_frame_project, demo_project
 from src.building_estimate import (
     G_EXT, G_FLOOR, G_INT, G_MANUAL, G_OPEN, G_ROOF, G_TERRACE, NOT_FINAL, ST_DUP, ST_MISSING, empty_project, estimate,
-    export_rows,
+    EXPORT_HEADER, export_rows,
 )
 from src.floor_frame import calculate_module
 
@@ -31,7 +31,7 @@ def one(est, group, text):
 
 class TestDemoControlValues(unittest.TestCase):
     def setUp(self):
-        self.p = demo_project()
+        self.p = demo_frame_project()
         self.e = estimate(self.p)
 
     def test_no_errors_and_all_main_groups_present(self):
@@ -130,7 +130,7 @@ class TestNoInventedValues(unittest.TestCase):
         self.assertEqual(e.group_status(G_FLOOR), "NEPILNA")
 
     def test_missing_thickness_gives_not_entered(self):
-        p = demo_project()
+        p = demo_frame_project()
         for layer in p["layers"]:
             if layer["name"] == "Jumta siltinājums":
                 layer["thickness_mm"] = None
@@ -142,14 +142,14 @@ class TestNoInventedValues(unittest.TestCase):
         self.assertTrue(any("biezums" in m for m in e.missing[G_ROOF]))
 
     def test_missing_step_and_frame_params(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["frames"]["ext"]["step_mm"] = None
         e = estimate(p)
         self.assertEqual(rows_of(e, G_EXT, "karkasa"), [])
         self.assertTrue(any("karkasa" in m for m in e.missing[G_EXT]))
 
     def test_unconfirmed_module_not_counted(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["modules"][1]["confirmed"] = False
         e = estimate(p)
         self.assertEqual(rows_of(e, G_FLOOR, "Modulis B"), [])
@@ -157,7 +157,7 @@ class TestNoInventedValues(unittest.TestCase):
         self.assertFalse(e.complete)
 
     def test_roof_slope_requires_confirmation(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["roof"]["slope_confirmed"] = False
         e = estimate(p)
         self.assertIsNone(e.areas["roof_m2"])
@@ -166,7 +166,7 @@ class TestNoInventedValues(unittest.TestCase):
         self.assertEqual(one(estimate(p), G_ROOF, "Jumta segums").qty, 130.0)
 
     def test_wall_height_is_editable_default(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["wall_height_mm"] = 3000
         self.assertAlmostEqual(estimate(p).areas["ext_walls_gross_m2"], 48 * 3.0, 9)
         p["ext_walls"][0]["height_mm"] = 2500                      # posma augstums pārraksta noklusējumu
@@ -175,7 +175,7 @@ class TestNoInventedValues(unittest.TestCase):
 
 class TestValidation(unittest.TestCase):
     def test_openings_exceed_wall_blocks_net(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["openings"].append({"kind": "Logs", "name": "Milzu", "width_mm": 9000, "height_mm": 9000, "count": 5, "wall": "Ārsiena"})
         e = estimate(p)
         self.assertTrue(any("atveru laukums" in x for x in e.errors))
@@ -184,19 +184,19 @@ class TestValidation(unittest.TestCase):
         self.assertFalse(e.complete)
 
     def test_ext_length_cannot_exceed_module_perimeters(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["ext_walls"][0]["length_m"] = 40.0
         e = estimate(p)
         self.assertTrue(any("pārsniedz moduļu perimetru" in x for x in e.errors))
 
     def test_shared_seams_counted_as_facade_warns(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["ext_walls"] = [{"name": "viss", "length_m": 56.0, "height_mm": None}]       # = Σ moduļu perimetri → šuves iekļautas
         e = estimate(p)
         self.assertTrue(any("kopīgās moduļu šuves" in w for w in e.warnings))
 
     def test_negative_and_garbage_input(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["ext_walls"][0]["length_m"] = -5
         p["terraces"][0]["area_m2"] = "abc"
         e = estimate(p)
@@ -204,7 +204,7 @@ class TestValidation(unittest.TestCase):
         self.assertTrue(any("nederīga" in x for x in e.errors))
 
     def test_reinforcement_conflict_is_reported_not_hidden(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["modules"][0]["axes"] = "822"                          # pārklājas ar R1, netiek snapots
         e = estimate(p)
         self.assertTrue(any("Modulis A" in x and "pārklājas" in x for x in e.errors))
@@ -212,7 +212,7 @@ class TestValidation(unittest.TestCase):
         self.assertFalse(e.complete)
 
     def test_duplicate_layer_excluded_once(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["layers"].append({"group": "Iekšējā apdare", "name": "grīdas  APDARE", "basis": "floor_net", "unit": "m²",
                             "thickness_mm": None, "step_mm": None, "waste_pct": 10, "source": "", "enabled": True})
         e = estimate(p)
@@ -221,22 +221,22 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(len(counted), 1)
         self.assertEqual(len([r for r in e.rows if r.status == ST_DUP]), 1)
         self.assertTrue(any("dublikāts" in w for w in e.warnings))
-        self.assertEqual(len([s for s in e.summary()]), len(estimate(demo_project()).summary()))
+        self.assertEqual(len([s for s in e.summary()]), len(estimate(demo_frame_project()).summary()))
 
     def test_same_name_other_basis_is_not_duplicate(self):
-        e = estimate(demo_project())
+        e = estimate(demo_frame_project())
         self.assertEqual([r for r in e.rows if r.status == ST_DUP], [])
         self.assertEqual(len(rows_of(e, text="Karkasa pildījums")), 2)     # ārsienas un iekšsienas
 
     def test_too_many_modules(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["modules"] = p["modules"] * 6
         self.assertTrue(any("pārāk daudz moduļu" in x for x in estimate(p).errors))
 
 
 class TestPricesAndExport(unittest.TestCase):
     def test_prices_and_hours_only_when_entered(self):
-        p = demo_project()
+        p = demo_frame_project()
         r = one(estimate(p), G_EXT, "Vēja plēve")
         self.assertIsNone(r.cost)
         p["prices"] = {r.price_key(): {"price": 2.0, "hours": 3.5}}
@@ -249,19 +249,20 @@ class TestPricesAndExport(unittest.TestCase):
         self.assertGreater(s["unpriced_rows"], 0)
 
     def test_csv_complete_demo(self):
-        e = estimate(demo_project())
+        e = estimate(demo_frame_project())
         rows = export_rows("DEMO", e)
         self.assertEqual(rows[0][0], NOT_FINAL)
         self.assertIn("provizoriska", rows[1][1])
         text = "\n".join(";".join(map(str, r)) for r in rows)
         self.assertIn("NAV IEKĻAUTS", text)
-        self.assertIn("Inženierkomunikācijas", text)
+        self.assertIn("Darbs, transports, montāža", text)
         self.assertIn("pieņēmums (nav apstiprināts)", text)
         self.assertIn("manuāli", text)
-        self.assertEqual(len(rows), 3 + len(e.rows) + len(e.excluded))
+        self.assertIn(EXPORT_HEADER, rows)
+        self.assertEqual(len(rows) - rows.index(EXPORT_HEADER) - 1, len(e.rows) + len(e.excluded) + sum(len(v) for v in e.missing.values()))
 
     def test_csv_incomplete_is_marked_and_formula_safe(self):
-        p = demo_project()
+        p = demo_frame_project()
         p["roof"]["slope_confirmed"] = False
         p["name"] = "=HYPERLINK(1)"
         p["manual"].append({"group": G_MANUAL, "material": "=cmd|x", "qty": 1, "unit": "gab.", "waste_pct": 0, "source": "@x"})
@@ -269,7 +270,8 @@ class TestPricesAndExport(unittest.TestCase):
         self.assertIn("NEPILNA", rows[1][1])
         self.assertFalse(rows[1][0].startswith("="))
         self.assertTrue(any(len(r) > 1 and r[1] == "'=cmd|x" for r in rows))
-        self.assertTrue(any(r[-1] == "NEPILNA SADAĻA" for r in rows))
+        self.assertTrue(any(r and r[-1] == "NEPILNA SADAĻA" for r in rows))
+        self.assertTrue(any(len(r) > 1 and r[1] == "'=cmd|x" for r in rows))
 
 
 # ---- UI ---------------------------------------------------------------------------------------------------------
@@ -295,7 +297,7 @@ class TestUi(unittest.TestCase):
         at.button(key="bp_demo").click().run()
         self.assertFalse(at.exception)
         values = {m.label: m.value for m in at.metric}
-        self.assertEqual(values["Koksne kopā (neto)"], "8.579 m³")
+        self.assertEqual(values["Koksne kopā (neto)"], "32.563 m³")
         self.assertEqual(len(at.get("download_button")), 1)
         self.assertTrue(any("PROVIZORISKA" in w.value for w in at.warning))
         self.assertTrue(any("NAV IEKĻAUTS" in e.value for e in at.error))

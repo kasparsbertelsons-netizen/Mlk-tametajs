@@ -12,13 +12,16 @@ import streamlit as st
 
 from src.building_demo import DEMO_NAME, demo_project
 from src.building_estimate import (
-    BASES, DEFAULT_WALL_HEIGHT_MM, EXPORT_HEADER, G_MANUAL, LAYER_GROUPS, MANUAL_GROUPS, NOT_FINAL, ST_DUP, UNITS,
+    BASES, CONSTRUCTIONS, DRIVERS, LAYER_GROUPS, MANUAL_GROUPS, NOT_FINAL, STAGE_NOTE, ST_DUP, UNITS, default_layers,
     empty_project, estimate, export_rows, module_fp,
 )
 
 KEY = "bp_project"
 VER = "bp_version"
 BASIS_LABELS = list(BASES.values())
+DRIVER_LABELS = list(DRIVERS.values())
+LABEL_TO_DRIVER = {v: k for k, v in DRIVERS.items()}
+CLT_ROWS = [("ext", "CLT ārsienu paneļi"), ("int", "CLT iekšsienu paneļi"), ("roof", "CLT jumta paneļi"), ("floor", "CLT grīdas paneļi")]
 LABEL_TO_BASIS = {v: k for k, v in BASES.items()}
 
 
@@ -117,6 +120,19 @@ def render_building_mode():
     result_box = st.container()
 
     project["name"] = st.text_input("Projekta nosaukums", value=project.get("name") or "", max_chars=80, key=f"bp_name_{ver}")
+    st.caption(STAGE_NOTE)
+    labels = list(CONSTRUCTIONS.values())
+    current = project.get("construction", "clt")
+    choice = st.radio("Konstrukcijas tips (vienota aplikācija, atšķirīgas receptes)", labels,
+                      index=list(CONSTRUCTIONS).index(current) if current in CONSTRUCTIONS else 0, key=f"bp_constr_{ver}")
+    chosen = list(CONSTRUCTIONS)[labels.index(choice)]
+    if chosen != current:
+        project["construction"] = chosen
+        project["layers"] = default_layers(chosen)          # CLT un karkasa slāņu saraksti atšķiras
+        st.session_state["bp_switch_notice"] = chosen
+        st.rerun()
+    if st.session_state.pop("bp_switch_notice", None):
+        st.warning("Konstrukcijas tips mainīts: slāņu saraksts aizstāts ar attiecīgā tipa noklusējumu (iepriekšējie slāņu labojumi zaudēti).")
 
     with st.expander("1. Moduļi (grīdas rāmis — esošais kodols)", expanded=not project["modules"]):
         st.caption("Katrs modulis ir taisnstūris ar APSTIPRINĀTIEM L un W (mm). Atzīmē «Apstiprināts»; mainot L, W vai asis, "
@@ -147,6 +163,38 @@ def render_building_mode():
         _table(project, "terraces", ["name", "area_m2"], {"name": st.column_config.TextColumn("Terase"),
                "area_m2": st.column_config.NumberColumn("Platība (m²)", min_value=0.0)}, numeric=("area_m2",))
 
+    if project.get("construction") == "clt":
+        with st.expander("2b. CLT paneļi (biezums jāievada un jāapstiprina)", expanded=False):
+            st.caption("Ārsienu/iekšsienu CLT paneļi: neto laukums (bez atverēm) × biezums → m² un m³. Cena tiek piesaistīta TIKAI "
+                       "izvēlētajai vienībai (m² vai m³), otra vienība tiek rādīta bet netiek cenota (nedubultot izmaksas). CLT rezerve "
+                       "ir regulējama atsevišķi (10% ir provizorisks pieņēmums). Biezumi nav izdomāti: tukšs = «nav ievadīts». "
+                       "Atgriezumu/optimizācijas algoritms nav realizēts.")
+            project["floor_frame_enabled"] = st.checkbox("Šim projektam ir koka grīdas pamatrāmis (esošais rāmja kodols)",
+                                                         value=project.get("floor_frame_enabled", True), key=f"bp_ffe_{ver}")
+            clt = project.setdefault("clt", {})
+            df = pd.DataFrame([{"key": k, "Paneļi": label, "enabled": bool((clt.get(k) or {}).get("enabled")),
+                                "thickness_mm": (clt.get(k) or {}).get("thickness_mm"),
+                                "thickness_confirmed": bool((clt.get(k) or {}).get("thickness_confirmed")),
+                                "price_unit": (clt.get(k) or {}).get("price_unit") or "m²",
+                                "waste_pct": (clt.get(k) or {}).get("waste_pct"), "article": (clt.get(k) or {}).get("article"),
+                                "source": (clt.get(k) or {}).get("source")} for k, label in CLT_ROWS])
+            for col in ("thickness_mm", "waste_pct"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            edited = st.data_editor(df, hide_index=True, use_container_width=True, key=f"bp_clt_{ver}",
+                                    disabled=["key", "Paneļi"], column_order=["Paneļi", "enabled", "thickness_mm", "thickness_confirmed",
+                                                                              "price_unit", "waste_pct", "article", "source"],
+                                    column_config={"enabled": st.column_config.CheckboxColumn("Ieskaitīt"),
+                                                   "thickness_mm": st.column_config.NumberColumn("Biezums (mm)", min_value=0.0),
+                                                   "thickness_confirmed": st.column_config.CheckboxColumn("Biezums apstiprināts"),
+                                                   "price_unit": st.column_config.SelectboxColumn("Cena pēc", options=["m²", "m³"]),
+                                                   "waste_pct": st.column_config.NumberColumn("Rezerve %", min_value=0.0, max_value=100.0),
+                                                   "article": st.column_config.TextColumn("Artikuls"),
+                                                   "source": st.column_config.TextColumn("Avots")})
+            for rec in edited.to_dict("records"):
+                clt[rec["key"]] = {"enabled": bool(rec["enabled"]), "thickness_mm": _clean(rec["thickness_mm"]),
+                                   "thickness_confirmed": bool(rec["thickness_confirmed"]), "price_unit": rec["price_unit"] or "m²",
+                                   "waste_pct": _clean(rec["waste_pct"]), "article": _clean(rec["article"]), "source": _clean(rec["source"]) or ""}
+
     wall_cfg = {"name": st.column_config.TextColumn("Posms"),
                 "length_m": st.column_config.NumberColumn("Garums (m)", min_value=0.0),
                 "height_mm": st.column_config.NumberColumn("Augstums (mm) — tukšs = noklusējums", min_value=0)}
@@ -155,11 +203,13 @@ def render_building_mode():
                    "moduļu perimetru.")
         _number("Noklusējuma sienu augstums (mm) — orientējošs, rediģējams", project, ("wall_height_mm",), step=50.0)
         _table(project, "ext_walls", ["name", "length_m", "height_mm"], wall_cfg, numeric=("length_m", "height_mm"))
-        _frame_inputs(project, "ext", "Ārsienu karkass (nav apstiprināts, ja nav zināms)")
+        if project.get("construction") == "frame":
+            _frame_inputs(project, "ext", "Ārsienu karkass (nav apstiprināts, ja nav zināms)")
 
     with st.expander("4. Iekšsienas", expanded=False):
         _table(project, "int_walls", ["name", "length_m", "height_mm"], wall_cfg, numeric=("length_m", "height_mm"))
-        _frame_inputs(project, "int", "Iekšsienu karkass (nav apstiprināts, ja nav zināms)")
+        if project.get("construction") == "frame":
+            _frame_inputs(project, "int", "Iekšsienu karkass (nav apstiprināts, ja nav zināms)")
 
     with st.expander("5. Logi un durvis (atveres atskaita attiecīgajā sienu grupā)", expanded=False):
         _table(project, "openings", ["kind", "name", "width_mm", "height_mm", "count", "wall"], {
@@ -183,17 +233,18 @@ def render_building_mode():
             _number("Jumta leņķis (°)", project, ("roof", "angle_deg"), step=1.0)
             roof["slope_confirmed"] = st.checkbox("Apstiprinu slīpuma aprēķinu (platība = projekcija / cos leņķis)",
                                                   value=bool(roof.get("slope_confirmed")), key=f"bp_roofok_{ver}")
-        _frame_inputs(project, "roof", "Jumta spāres (provizoriski; solis = attālums starp spārēm)")
+        _frame_inputs(project, "roof", "Jumta spāres (neobligāti CLT projektā; provizoriski, solis = attālums starp spārēm)")
 
     with st.expander("7. Konstrukciju slāņi (pa grupām)", expanded=False):
         st.caption("Slāņu nosaukumi ir tikai ieteikumi. m³ prasa biezumu, m (piem. latojums) prasa soli mm; tukšs = «nav ievadīts». "
                    "Rezerve % pēc noklusējuma 10, nošķirta no neto. Viens un tas pats slānis (nosaukums + pamats) netiek ieskaitīts divreiz.")
         layers = pd.DataFrame(project.get("layers") or [], columns=["enabled", "group", "name", "basis", "unit", "thickness_mm",
-                                                                  "step_mm", "waste_pct", "source"])
+                                                                  "step_mm", "waste_pct", "approved", "article", "source"])
         layers["basis"] = layers["basis"].map(BASES).fillna(layers["basis"])
         for col in ("thickness_mm", "step_mm", "waste_pct"):
             layers[col] = pd.to_numeric(layers[col], errors="coerce")
         layers["enabled"] = layers["enabled"].fillna(True).astype(bool)
+        layers["approved"] = layers["approved"].fillna(False).astype(bool)
         edited = st.data_editor(layers, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"bp_layers_{ver}",
                                 column_config={
             "enabled": st.column_config.CheckboxColumn("Ieskaitīt"),
@@ -204,24 +255,79 @@ def render_building_mode():
             "thickness_mm": st.column_config.NumberColumn("Biezums (mm)", min_value=0.0),
             "step_mm": st.column_config.NumberColumn("Solis (mm)", min_value=0.0),
             "waste_pct": st.column_config.NumberColumn("Rezerve %", min_value=0.0, max_value=100.0),
+            "approved": st.column_config.CheckboxColumn("Apstiprināts"),
+            "article": st.column_config.TextColumn("Artikuls"),
             "source": st.column_config.TextColumn("Avots / pieņēmums")})
-        recs = _records(edited, boolean=("enabled",))
+        recs = _records(edited, boolean=("enabled", "approved"))
         for rec in recs:
             rec["basis"] = LABEL_TO_BASIS.get(rec.get("basis"), rec.get("basis"))
         project["layers"] = recs
 
-    with st.expander("8. Manuālās rindas un neiekļautie darbi", expanded=False):
-        st.caption("Manuāla materiāla rinda neautomatizētam apjomam (vannasistaba, MEP u.c.). Tā tiek marķēta «manuāli».")
-        _table(project, "manual", ["group", "material", "qty", "unit", "waste_pct", "source"], {
+    with st.expander("8. Receptes — patēriņa normas (stiprinājumi, lentes, MEP u.c.)", expanded=False):
+        st.caption("Katra recepte: materiāls × PATĒRIŅA NORMA uz izvēlēto pamatu (m², m, gab.) VAI tiešs daudzums. Normas nav izdomātas: "
+                   "tukša norma = «nav ievadīts». Artikuls (ja ir katalogā) aizpilda nosaukumu, specifikāciju, vienību un iepakojumu. "
+                   "«Ražošanas posms» ir brīvs lauks — klasifikācija netiek izstrādāta.")
+        recipes = pd.DataFrame(project.get("recipes") or [], columns=["enabled", "group", "article", "name", "spec", "unit", "driver",
+                                                                      "norm", "qty", "waste_pct", "pack_size", "module", "stage",
+                                                                      "approved", "source"])
+        recipes["driver"] = recipes["driver"].map(DRIVERS).fillna(recipes["driver"])
+        for col in ("norm", "qty", "waste_pct", "pack_size"):
+            recipes[col] = pd.to_numeric(recipes[col], errors="coerce")
+        recipes["enabled"] = recipes["enabled"].fillna(True).astype(bool)
+        recipes["approved"] = recipes["approved"].fillna(False).astype(bool)
+        edited = st.data_editor(recipes, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"bp_recipes_{ver}",
+                                column_config={
+            "enabled": st.column_config.CheckboxColumn("Ieskaitīt"),
             "group": st.column_config.SelectboxColumn("Grupa", options=MANUAL_GROUPS),
-            "material": st.column_config.TextColumn("Materiāls"),
+            "article": st.column_config.TextColumn("Artikuls"), "name": st.column_config.TextColumn("Materiāls"),
+            "spec": st.column_config.TextColumn("Specifikācija"), "unit": st.column_config.TextColumn("Vienība"),
+            "driver": st.column_config.SelectboxColumn("Pamats", options=DRIVER_LABELS),
+            "norm": st.column_config.NumberColumn("Norma uz pamata vienību", min_value=0.0),
+            "qty": st.column_config.NumberColumn("Tiešs daudzums", min_value=0.0),
+            "waste_pct": st.column_config.NumberColumn("Rezerve % (tukšs = noklusējums)", min_value=0.0),
+            "pack_size": st.column_config.NumberColumn("Iepakojums", min_value=0.0),
+            "module": st.column_config.TextColumn("Modulis/telpa/sistēma"), "stage": st.column_config.TextColumn("Ražošanas posms"),
+            "approved": st.column_config.CheckboxColumn("Apstiprināts"), "source": st.column_config.TextColumn("Avots / pieņēmums")})
+        recs = _records(edited, boolean=("enabled", "approved"))
+        for rec in recs:
+            rec["driver"] = LABEL_TO_DRIVER.get(rec.get("driver"), rec.get("driver") or "direct")
+        project["recipes"] = recs
+
+    with st.expander("9. Materiālu katalogs (artikuli, cenas)", expanded=False):
+        st.caption("Neobligāts katalogs: viena cena un iepakojums artikulam attiecas uz VISĀM rindām ar šo artikulu (cena tiek piemērota, "
+                   "ja katalogā un rindā vienība sakrīt). Sasaiste ar MLK/Moneo artikuliem — nākamajos posmos; šeit tikai teksts.")
+        _table(project, "catalog", ["article", "name", "spec", "unit", "unit_price", "pack_size", "source"], {
+            "article": st.column_config.TextColumn("Artikuls"), "name": st.column_config.TextColumn("Nosaukums"),
+            "spec": st.column_config.TextColumn("Specifikācija"), "unit": st.column_config.TextColumn("Vienība"),
+            "unit_price": st.column_config.NumberColumn("Cena par vienību (EUR)", min_value=0.0),
+            "pack_size": st.column_config.NumberColumn("Iepakojums", min_value=0.0),
+            "source": st.column_config.TextColumn("Avots")}, numeric=("unit_price", "pack_size"))
+
+    with st.expander("10. Manuālās rindas, citas izmaksas, pārbaude", expanded=False):
+        st.caption("Manuāla materiāla rinda neautomatizētam apjomam (vannasistaba, MEP u.c.) — marķēta «manuāli».")
+        _table(project, "manual", ["group", "article", "material", "spec", "qty", "unit", "waste_pct", "pack_size", "module", "stage",
+                                   "approved", "source"], {
+            "group": st.column_config.SelectboxColumn("Grupa", options=MANUAL_GROUPS),
+            "article": st.column_config.TextColumn("Artikuls"), "material": st.column_config.TextColumn("Materiāls"),
+            "spec": st.column_config.TextColumn("Specifikācija"),
             "qty": st.column_config.NumberColumn("Daudzums", min_value=0.0),
             "unit": st.column_config.TextColumn("Vienība"),
             "waste_pct": st.column_config.NumberColumn("Rezerve %", min_value=0.0),
-            "source": st.column_config.TextColumn("Avots")}, numeric=("qty", "waste_pct"))
+            "pack_size": st.column_config.NumberColumn("Iepakojums", min_value=0.0),
+            "module": st.column_config.TextColumn("Modulis/telpa/sistēma"), "stage": st.column_config.TextColumn("Ražošanas posms"),
+            "approved": st.column_config.CheckboxColumn("Apstiprināts"),
+            "source": st.column_config.TextColumn("Avots")}, numeric=("qty", "waste_pct", "pack_size"), boolean=("approved",))
+        st.markdown("**Citas izmaksas (EUR)** — tukšs = NAV ievadīts, NAV iekļauts budžetā")
+        _table(project, "other_costs", ["name", "amount_eur"], {"name": st.column_config.TextColumn("Izmaksu pozīcija"),
+               "amount_eur": st.column_config.NumberColumn("Summa (EUR)", min_value=0.0)}, numeric=("amount_eur",))
         text = st.text_area("Šajā tāmē NEIEKĻAUTIE darbi (katrs savā rindā)", value="\n".join(project.get("excluded", [])),
                             key=f"bp_excl_{ver}", height=110)
         project["excluded"] = [line.strip() for line in text.splitlines() if line.strip()]
+        st.markdown("**Atbildīgās personas pārbaude** (iepirkumu saraksts nav «gatavs» bez tās un bez obligāto grupu pārklājuma)")
+        review = project.setdefault("review", {"reviewer": "", "confirmed": False})
+        review["reviewer"] = st.text_input("Pārbaudītāja vārds", value=review.get("reviewer") or "", key=f"bp_rev_{ver}", max_chars=60)
+        review["confirmed"] = st.checkbox("Apstiprinu, ka esmu pārbaudījis šo sarakstu", value=bool(review.get("confirmed")),
+                                          key=f"bp_revok_{ver}")
 
     est = estimate(project)
     with result_box:
@@ -250,8 +356,8 @@ def _render_result(project, est):
         st.warning("**NEPILNA TĀME.** Trūkst ievaddatu vai ir kļūdas; trūkstošie lielumi NAV aizvietoti ar pieņēmumiem. "
                    "Neizmanto kā piedāvājumu.")
     else:
-        st.warning("Visi pamata ievaddati ievadīti, bet tāme joprojām ir PROVIZORISKA: karkasa/slāņu parametri ir lietotāja "
-                   "pieņēmumi, nav MLK recepšu un cenu. Nav gala piedāvājums.")
+        st.warning("Pamata ievaddati ievadīti, bet tāme joprojām ir PROVIZORISKA: biezumi, normas un slāņu parametri ir lietotāja "
+                   "ievadīti pieņēmumi, nav MLK recepšu un cenu. Nav gala piedāvājums.")
     for group, items in est.missing.items():
         with st.expander(f"Nepilna sadaļa: {group} ({len(items)})"):
             for item in items:
@@ -263,24 +369,40 @@ def _render_result(project, est):
         return
 
     summary = est.summary()
+    bud = est.budget()
+    st.markdown("**Budžeta kopsavilkums** (tikai ievadītās cenas)")
+    b1, b2 = st.columns(2)
+    b1.metric("Materiāli (rindas ar cenu)", f"{bud['materials']:.2f} EUR" if bud["priced_rows"] else "cenas nav ievadītas")
+    b2.metric("Kopā ar citām izmaksām", f"{bud['total']:.2f} EUR" + (" — NEPILNS" if bud["incomplete"] else "") if (bud["priced_rows"] or bud["other_entered"]) else "nav ievadīts")
+    if bud["incomplete"]:
+        notes = []
+        if bud["unpriced_rows"]:
+            notes.append(f"bez cenas {bud['unpriced_rows']} rindas")
+        if bud["other_missing"]:
+            notes.append("neievadītas izmaksas: " + ", ".join(bud["other_missing"]))
+        if est.uncovered:
+            notes.append("obligātās grupas bez datiem: " + ", ".join(est.uncovered))
+        st.warning("Budžets ir NEPILNS: " + "; ".join(notes) + ". Neievadīts nav nulle.")
+    if bud["unapproved_rows"]:
+        st.caption(f"Nav apstiprinātas rindas: {bud['unapproved_rows']} (lietotāja ievadīti/provizoriski parametri).")
+    st.info("**Iepirkuma gatavība:** " + est.procurement_status)
     st.markdown("**Kopsavilkums pa grupām**")
     st.dataframe([{"Grupa": s["group"], "Statuss": s["status"], "Rindas": s["rows"], "Nav ievadīts": s["not_entered"],
                    "Koksne neto m³": round(s["timber_net"], 3), "Koksne pasūt. m³": round(s["timber_order"], 3),
                    "Izmaksas EUR": None if s["cost"] is None else round(s["cost"], 2),
                    "Darba st.": s["hours"]} for s in summary], hide_index=True, use_container_width=True)
     t_net, t_order = sum(s["timber_net"] for s in summary), sum(s["timber_order"] for s in summary)
-    m1, m2, m3 = st.columns(3)
+    m1, m2 = st.columns(2)
     m1.metric("Koksne kopā (neto)", f"{t_net:.3f} m³")
     m2.metric("Koksne pasūtāmā (ar rezervi)", f"{t_order:.3f} m³")
-    unpriced = sum(s["unpriced_rows"] for s in summary)
-    priced = sum(s["cost"] for s in summary if s["cost"] is not None)
-    m3.metric("Izmaksas (tikai ievadītās cenas)", f"{priced:.2f} EUR" if any(s["cost"] is not None for s in summary) else "nav ievadītas")
-    if unpriced:
-        st.caption(f"Bez cenas: {unpriced} rindas — izmaksu summa ir NEPILNA, ja tiek rādīta. Dažādu materiālu daudzumi netiek summēti.")
+    st.caption("Koksne = rāmja koks + CLT paneļi (m³). Dažādu materiālu daudzumi netiek summēti.")
 
     st.markdown("**Materiālu tabula**")
     table = [{"Materiāls": r.material, "Neto": None if r.qty is None else round(r.qty, 3), "Vienība": r.unit,
-              "Pasūtāmais": None if r.order_qty is None else round(r.order_qty, 3), "Grupa": r.group, "Statuss": r.status, "Rezerve %": r.waste_pct,
+              "Pasūtāmais": None if r.order_qty is None else round(r.order_qty, 3), "Grupa": r.group, "Statuss": r.status,
+              "Apstiprinājums": r.approval, "Artikuls": r.article, "Specifikācija": r.spec, "Rezerve %": r.waste_pct,
+              "Iepakojums": r.pack_size, "Modulis/sistēma": r.module, "Ražošanas posms": r.stage,
+              "Alt. vienība (nav cenota)": None if r.alt_qty is None else f"{r.alt_qty:.3f} {r.alt_unit}",
               "Pamats": r.basis, "Avots/pieņēmums": r.source, "Piezīme": r.note} for r in est.rows]
     st.dataframe(table, hide_index=True, use_container_width=True)
     st.caption("Pasūtāmais = neto × (1 + rezerve). Rezerve NAV neto daudzums. «gab.» tiek noapaļots uz augšu.")
@@ -288,7 +410,8 @@ def _render_result(project, est):
     with st.expander("Cenas un darba stundas (neobligāti, manuāli; atstāj tukšu, ja nav zināms)"):
         rows = [r for r in est.rows if r.qty is not None and r.status != ST_DUP]
         df = pd.DataFrame([{"Grupa": r.group, "Materiāls": r.material, "Pasūtāmais": round(r.order_qty, 3), "Vienība": r.unit,
-                            "Cena par vienību (EUR)": r.unit_price, "Darba stundas": r.hours} for r in rows],
+                            "Cena par vienību (EUR)": (project.get("prices") or {}).get(r.price_key(), {}).get("price"),
+                            "Darba stundas": r.hours} for r in rows],
                           columns=["Grupa", "Materiāls", "Pasūtāmais", "Vienība", "Cena par vienību (EUR)", "Darba stundas"])
         for col in ("Cena par vienību (EUR)", "Darba stundas"):
             df[col] = pd.to_numeric(df[col], errors="coerce")

@@ -5,14 +5,17 @@ fasādē NETIEK skaitīta). Ārsienu garums = 2×(20+4) = 48 m, nevis moduļu pe
 Karkasa šķērsgriezumi, soļi, biezumi un cenas ir DEMONSTRĀCIJAS vērtības, nevis MLK receptes.
 """
 from src.building_estimate import (
-    G_EXT, G_FINISH, G_FLOOR, G_INT, G_ROOF, default_layers, empty_project, module_fp,
+    G_ELEC, G_EQUIP, G_EXT, G_FASTEN, G_FINISH, G_FLOOR, G_INT, G_PLUMB, G_ROOF, G_SANIT, G_VENT, default_layers, empty_project,
+    module_fp,
 )
 
-DEMO_NAME = "DEMO — sintētiska divu moduļu māja (nav reāls projekts)"
+DEMO_NAME = "DEMO — sintētiska CLT moduļu māja (nav reāls projekts)"
+DEMO_FRAME_NAME = "DEMO — sintētiska koka karkasa māja (2. posms; nav reāls projekts)"
 
 
-def demo_project():
-    p = empty_project(DEMO_NAME)
+def demo_frame_project():
+    """Koka karkasa demonstrācija (2. posms; saglabāta universālā koda testiem)."""
+    p = empty_project(DEMO_FRAME_NAME, "frame")
     p["modules"] = [
         {"name": "Modulis A", "length_mm": 12000, "width_mm": 4000, "confirmed": True, "axes": "822.5 1150"},
         {"name": "Modulis B", "length_mm": 8000, "width_mm": 4000, "confirmed": True, "axes": ""},
@@ -40,7 +43,7 @@ def demo_project():
     thickness = {(G_EXT, "Karkasa pildījums (vate)"): 145, (G_INT, "Karkasa pildījums (vate)"): 70,
                  (G_ROOF, "Jumta siltinājums"): 200}
     steps = {(G_EXT, "Fasādes latojums"): 600, (G_ROOF, "Latojums"): 350}
-    layers = default_layers()
+    layers = default_layers("frame")
     for layer in layers:
         key = (layer["group"], layer["name"])
         if key in thickness:
@@ -53,4 +56,60 @@ def demo_project():
     p["manual"] = [{"group": "Manuālās rindas", "material": "Vannasistabas hidroizolācija (komplekts)", "qty": 1, "unit": "kompl.",
                     "waste_pct": 0, "source": "Manuāli (neautomatizēts apjoms)"}]
     p["prices"] = {}
+    return p
+
+
+def demo_project():
+    """Pilna CLT moduļu mājas SINTĒTISKA demonstrācija. Visi biezumi, normas, daudzumi, artikuli un cenas ir izdomāti DEMO dati —
+    NAV MLK specifikācijas, normas vai cenas. Ģeometrija: kā karkasa demonstrācijai (2 moduļi, ārsienas 48 m)."""
+    p = demo_frame_project()
+    p["name"], p["construction"] = DEMO_NAME, "clt"
+    p["frames"] = {k: {"b_mm": None, "h_mm": None, "step_mm": None} for k in ("ext", "int", "roof")}
+    p["floor_frame_enabled"] = True                      # esošais koka pamatrāmis (rāmja kodols) saglabāts
+    demo = "DEMO sintētisks (nav MLK dati)"
+    p["clt"] = {
+        "ext": {"enabled": True, "thickness_mm": 100, "thickness_confirmed": True, "price_unit": "m³", "waste_pct": 10.0,
+                "article": "DEMO-CLT-100", "source": demo},
+        "int": {"enabled": True, "thickness_mm": 80, "thickness_confirmed": True, "price_unit": "m²", "waste_pct": 10.0,
+                "article": "DEMO-CLT-80", "source": demo},
+        "roof": {"enabled": True, "thickness_mm": 120, "thickness_confirmed": False, "price_unit": "m³", "waste_pct": 10.0,
+                 "article": None, "source": demo},
+        "floor": {"enabled": False, "thickness_mm": None, "thickness_confirmed": False, "price_unit": "m²", "waste_pct": 10.0,
+                  "article": None, "source": ""}}
+    thickness = {"Ārsienu siltinājums (pie CLT)": 150, "Instalāciju slānis": 50, "Jumta siltinājums": 200}
+    steps = {"Fasādes latojums": 600, "Latojums": 350}
+    layers = default_layers("clt")
+    for layer in layers:
+        layer["thickness_mm"] = thickness.get(layer["name"], layer["thickness_mm"])
+        layer["step_mm"] = steps.get(layer["name"], layer["step_mm"])
+        layer["source"] = layer["source"] or demo
+    p["layers"] = layers
+    p["catalog"] = [
+        {"article": "DEMO-CLT-100", "name": "CLT panelis 100 mm", "spec": "DEMO", "unit": "m³", "unit_price": None, "pack_size": None,
+         "source": demo},
+        {"article": "DEMO-SKR-6x80", "name": "Skrūve 6×80 (DEMO)", "spec": "DEMO; nav MLK specifikācija", "unit": "gab.",
+         "unit_price": 0.12, "pack_size": 200, "source": demo},
+    ]
+    def rec(group, name, driver, norm=None, qty=None, unit="gab.", art=None, spec="", module="", pack=None, source=demo, waste=None):
+        return {"group": group, "article": art, "name": name, "spec": spec, "unit": unit, "driver": driver, "norm": norm, "qty": qty,
+                "waste_pct": waste, "pack_size": pack, "module": module, "stage": "", "approved": False, "source": source, "enabled": True}
+    p["recipes"] = [
+        rec(G_FASTEN, "Skrūves CLT stiprināšanai", "ext_net", 6.0, art="DEMO-SKR-6x80", unit="gab."),
+        rec(G_FASTEN, "Hermetizācijas lente savienojumiem", "ext_len", 3.0, unit="m", spec="DEMO"),
+        rec(G_FASTEN, "Leņķskavas (DEMO)", "modules", 40.0, unit="gab."),
+        rec(G_VENT, "Ventilācijas caurule Ø125 (DEMO)", "direct", qty=36.0, unit="m", spec="DEMO; nav projektēts"),
+        rec(G_VENT, "Ventilācijas reste (DEMO)", "direct", qty=8, unit="gab."),
+        rec(G_ELEC, "Elektrokabelis 3×2,5 (DEMO)", "floor_net", 2.5, unit="m", spec="DEMO; norma uz m² grīdas"),
+        rec(G_ELEC, "Slēdži un kontaktligzdas (DEMO)", "direct", qty=42, unit="gab.", waste=0),
+        rec(G_PLUMB, "Ūdensvada caurule (DEMO)", "direct", qty=40.0, unit="m"),
+        rec(G_PLUMB, "Kanalizācijas caurule (DEMO)", "direct", qty=18.0, unit="m"),
+        rec(G_SANIT, "Sanitārtehnikas komplekts (DEMO)", "direct", qty=1, unit="kompl.", waste=0),
+        rec(G_EQUIP, "Rekuperators (DEMO; modelis nav izvēlēts)", "direct", qty=1, unit="gab.", spec="nav norādīta", waste=0),
+    ]
+    p["manual"] = [{"group": "Manuālās rindas", "material": "Vannasistabas hidroizolācija (komplekts)", "qty": 1, "unit": "kompl.",
+                    "waste_pct": 0, "source": "Manuāli (neautomatizēts apjoms)", "article": None, "spec": "", "module": "Modulis A",
+                    "stage": "", "pack_size": None, "approved": False}]
+    p["other_costs"] = [{"name": n, "amount_eur": None} for n in ("MEP darbs un montāža", "Transports", "Montāža objektā",
+                                                                 "Pieskaitāmās izmaksas", "Atlīdzība/peļņa")]
+    p["review"] = {"reviewer": "", "confirmed": False}
     return p
