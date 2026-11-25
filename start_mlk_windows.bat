@@ -6,6 +6,7 @@ title MLK Tamesanas Agents - lokala versija
 echo ============================================================
 echo  MLK Tamesanas Agents - LOKALA palaisana (tikai 127.0.0.1)
 echo  PDF apstrade notiek tikai uz so datora. Nekas netiek sutits uz internetu.
+echo  Internets vajadzigs TIKAI atkaribu instalesanai pirmaja reize vai pec "--update".
 echo ============================================================
 echo.
 
@@ -23,18 +24,11 @@ if not exist ".venv\Scripts\python.exe" (
     if errorlevel 1 goto :venvfail
 )
 
-echo Parbaudu un instaleju atkaribas. Pirmaja reize vajadzigs internets, lai tas lejupieladetu pakotnes.
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
-if errorlevel 1 goto :pipfail
-
-if not defined MLK_PORT set "MLK_PORT=8501"
-set "STREAMLIT_BROWSER_GATHER_USAGE_STATS=false"
-
-echo.
-echo Palaizu lietotni. Adrese datora parluka: http://127.0.0.1:%MLK_PORT%
-echo Lai apturetu, aizveriet so logu vai nospiediet Ctrl+C.
-echo.
-".venv\Scripts\python.exe" -m streamlit run app.py --server.address 127.0.0.1 --server.port %MLK_PORT% --server.headless false --browser.gatherUsageStats false
+REM Fiksets paligs: parbauda atkaribas bez interneta, instale tikai ja vajag, un palaiz Streamlit uz 127.0.0.1
+REM (--server.address 127.0.0.1, --browser.gatherUsageStats false). Ievade netiek likta komandrinda.
+set "UPDATE="
+if /i "%~1"=="--update" set "UPDATE=--update"
+".venv\Scripts\python.exe" tools\local_setup.py start %UPDATE%
 set "EXITCODE=%ERRORLEVEL%"
 goto :end
 
@@ -50,11 +44,6 @@ goto :end
 
 :venvfail
 echo KLUDA: neizdevas izveidot virtualo vidi .venv. Parbaudiet, vai mape nav tikai lasama.
-set "EXITCODE=1"
-goto :end
-
-:pipfail
-echo KLUDA: neizdevas instalet atkaribas. Parbaudiet interneta savienojumu (vajadzigs tikai instalesanai) un meginiet velreiz.
 set "EXITCODE=1"
 goto :end
 

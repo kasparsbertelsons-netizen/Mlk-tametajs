@@ -4,6 +4,8 @@
                                               [--summary-out kopsavilkums.json | --print-summary]
     python -m tools.ad_diagnostics --allowed-fields
 
+    python -m tools.ad_diagnostics --interactive [FAILS.pdf]    (rīks pats jautā: PDF, lapas, kontrolizmērus, saglabāšanu)
+
 Viss notiek LOKĀLI uz šī datora: rīks neizmanto tīklu, neko nesūta un nepublicē. Pēc noklusējuma tas tikai
 izdrukā pārskatu konsolē un NEVIENU failu neveido; HTML pārskats un sanitizētais kopsavilkums tiek saglabāti
 tikai pēc skaidra pieprasījuma. Pilns pārskats satur PDF saturu (nekopīgot); sanitizētais kopsavilkums satur
@@ -11,9 +13,12 @@ tikai atļauto lauku sarakstu (`--allowed-fields`) un ir jāapskata pirms jebkā
 """
 import argparse
 import base64
+import datetime
 import html
 import json
+import os
 import pathlib
+import re
 import sys
 
 from src import ad_diagnostics as diag
@@ -26,6 +31,50 @@ TEXT_CLASS_LV = {"floor": "grīdas plāns", "roof": "jumta plāns", "list": "tit
 PAGE_STATUS_LV = {"ok": "analizēta", "no_vector_geometry": "nav vektoru ģeometrijas", "error": "analīzes kļūda"}
 CATEGORY_LV = {"match": "sakrīt (≤ 0,5 %)", "small": "neliela novirze (≤ 2 %)", "medium": "vidēja novirze (≤ 10 %)",
                "large": "liela novirze (> 10 %)", "no_candidate": "nav nolasīta kandidāta"}
+
+
+# --- atskaišu mapes: PDF saturs nedrīkst nonākt sinhronizētās mapēs -------------------------------------------
+REPORTS_FOLDER_NAME = "MLK_diagnostika"
+SYNC_RE = re.compile(r"^(onedrive|dropbox|google ?drive|icloud|pcloud|nextcloud|owncloud|sharepoint|(mega|box|sync)\b)", re.I)
+SYNC_ENV_VARS = ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")
+
+
+def default_reports_dir(environ=None):
+    """Noklusētā atskaišu mape ārpus lietotāja sinhronizētajām mapēm (Windows: %LOCALAPPDATA%)."""
+    environ = os.environ if environ is None else environ
+    base = environ.get("LOCALAPPDATA")
+    if base:
+        return pathlib.Path(base) / REPORTS_FOLDER_NAME
+    data_home = environ.get("XDG_DATA_HOME")
+    return (pathlib.Path(data_home) if data_home else pathlib.Path.home() / ".local" / "share") / REPORTS_FOLDER_NAME
+
+
+def is_synced_folder(path, environ=None):
+    """Heiristika: ceļš šķiet OneDrive / Dropbox / Google Drive / iCloud u. c. sinhronizētā mapē."""
+    environ = os.environ if environ is None else environ
+    resolved = pathlib.Path(path).expanduser().resolve(strict=False)
+    if any(SYNC_RE.match(part) for part in resolved.parts):
+        return True
+    for name in SYNC_ENV_VARS:
+        root = environ.get(name)
+        if root:
+            try:
+                resolved.relative_to(pathlib.Path(root).resolve(strict=False))
+                return True
+            except ValueError:
+                pass
+    return False
+
+
+def unique_path(directory, stem, suffix):
+    """Brīvs faila nosaukums: esošs fails netiek pārrakstīts (pievieno -1, -2 …)."""
+    directory = pathlib.Path(directory)
+    candidate = directory / f"{stem}{suffix}"
+    number = 0
+    while candidate.exists():
+        number += 1
+        candidate = directory / f"{stem}-{number}{suffix}"
+    return candidate
 
 
 # --- pārskata saturs (kopīgs tekstam un HTML) -------------------------------------------------------------
@@ -227,6 +276,113 @@ def render_html(report, previews=None):
     return "".join(parts)
 
 
+# --- interaktīvā ievade (validē Python, nekad shell) -------------------------------------------------------------
+MAX_TRIES = 5
+YES = {"j", "ja", "jā", "y", "yes"}
+NO = {"", "n", "ne", "nē", "no"}
+
+
+def strip_path_input(text):
+    """Noņem atstarpes un vienu apkārtējo pēdiņu pāri (Windows 'Copy as path' ielīmē ceļu pēdiņās)."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
+
+
+def _ask(prompt, input_fn):
+    try:
+        return input_fn(prompt)
+    except EOFError:
+        raise diag.DiagnosticsError("Ievade pārtraukta.") from None
+
+
+def ask_yes_no(prompt, input_fn=input, say=print):
+    """Jā/nē jautājums; noklusējums ir NĒ (Enter). Atkārto, ja atbilde nav saprotama."""
+    for _ in range(MAX_TRIES):
+        answer = _ask(prompt + " (j/n, Enter = n): ", input_fn).strip().lower()
+        if answer in YES:
+            return True
+        if answer in NO:
+            return False
+        say("Atbildiet j vai n.")
+    raise diag.DiagnosticsError("Netika saņemta saprotama atbilde.")
+
+
+def interactive_session(pdf_arg=None, *, input_fn=input, say=print, environ=None, now=None):
+    """Pieprasa un VALIDĒ visu ievadi (PDF ceļš, lapas, kontrolizmēri, saglabāšana). Atgriež parsētas vērtības;
+    nekas netiek veidots kā komandrindas teksts. HTML netiek pārrakstīts: nosaukums vienmēr ir jauns."""
+    environ = os.environ if environ is None else environ
+    now = now or datetime.datetime.now
+    pdf_text = strip_path_input(pdf_arg or "")
+    pdf_path = None
+    for _ in range(MAX_TRIES):
+        if not pdf_text:
+            pdf_text = strip_path_input(_ask("PDF faila ceļš (var ielīmēt vai ievilkt failu šajā logā): ", input_fn))
+        if not pdf_text or any(ord(c) < 32 for c in pdf_text):
+            say("Norādiet PDF faila ceļu.")
+            pdf_text = ""
+            continue
+        candidate = pathlib.Path(pdf_text)
+        try:
+            ok = candidate.is_file()
+        except OSError:
+            ok = False
+        if ok:
+            pdf_path = candidate
+            break
+        say(f"Fails nav atrasts: {pdf_text}")
+        pdf_text = ""
+    if pdf_path is None:
+        raise diag.DiagnosticsError("PDF fails nav norādīts.")
+
+    pages = None
+    for _ in range(MAX_TRIES):
+        answer = _ask("Plāna lapa(s), piem. 3 vai 3,5 vai 3-6 (Enter = automātiski): ", input_fn).strip()
+        if not answer:
+            break
+        try:
+            pages = diag.parse_page_list(answer)
+            break
+        except diag.DiagnosticsError as error:
+            say(str(error))
+    else:
+        raise diag.DiagnosticsError("Netika saņemts derīgs lapu numurs.")
+
+    controls = []
+    for _ in range(MAX_TRIES * 2):
+        answer = _ask(f"Jūsu zināmais moduļa izmērs mm, piem. 12000x4000 (Enter = {'beigt' if controls else 'bez kontroles'}): ",
+                      input_fn).strip()
+        if not answer:
+            break
+        try:
+            controls.append(diag.parse_control(answer))
+        except diag.DiagnosticsError as error:
+            say(str(error))
+
+    html_path = None
+    reports_dir = default_reports_dir(environ)
+    if ask_yes_no(f"Saglabāt lokālu HTML pārskatu (satur PDF saturu) mapē {reports_dir}?", input_fn, say):
+        if is_synced_folder(reports_dir, environ):
+            say(f"Mape {reports_dir} šķiet sinhronizēta: pārskats netiek saglabāts. Norādiet citu mapi ar "
+                "--html (komandrindā).")
+        else:
+            stamp = now().strftime("%Y%m%d_%H%M%S")
+            html_path = unique_path(reports_dir, f"diagnostika_{stamp}", ".html")
+    print_summary = ask_yes_no("Parādīt sanitizēto kopsavilkumu apskatei (nekas netiek sūtīts)?", input_fn, say)
+    return {"pdf_path": pdf_path, "pages": pages, "controls": controls, "html_path": html_path,
+            "print_summary": print_summary}
+
+
+def _safe_console():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")      # Windows konsole: nekrītam uz nekodējamām rakstzīmēm
+            except Exception:
+                pass
+
+
 # --- komandrinda ------------------------------------------------------------------------------------------
 def build_parser():
     p = argparse.ArgumentParser(
@@ -243,46 +399,74 @@ def build_parser():
     p.add_argument("--print-summary", action="store_true", help="izdrukāt sanitizēto kopsavilkumu konsolē apskatei")
     p.add_argument("--allowed-fields", action="store_true", help="parādīt sanitizētā kopsavilkuma atļauto lauku sarakstu")
     p.add_argument("--overwrite", action="store_true", help="atļaut pārrakstīt esošu izvades failu")
+    p.add_argument("--allow-synced-folder", action="store_true",
+                   help="atļaut saglabāt sinhronizētā mapē (OneDrive/Dropbox u. c.): ATSKAITE SATUR PDF SATURU")
+    p.add_argument("--interactive", action="store_true",
+                   help="rīks pats pieprasa un validē ievadi (PDF ceļš, lapas, kontrolizmēri, saglabāšana)")
     return p
 
 
-def _check_output(path_text, pdf_path, overwrite):
+def _check_output(path_text, pdf_path, overwrite, allow_synced=False, environ=None):
     path = pathlib.Path(path_text)
     resolved = path.resolve()
     if resolved == pdf_path.resolve() or resolved.suffix.lower() == ".pdf":
         raise diag.DiagnosticsError("Izvades fails nedrīkst būt PDF (lai netiktu pārrakstīts rasējums).")
+    if not allow_synced and is_synced_folder(resolved.parent, environ):
+        raise diag.DiagnosticsError(
+            f"Mape '{resolved.parent}' šķiet sinhronizēta (OneDrive/Dropbox/Google Drive u. c.): atskaite ar PDF saturu "
+            f"varētu nonākt mākonī. Izvēlieties mapi ārpus sinhronizācijas (piem., {default_reports_dir(environ)}) vai "
+            "skaidri atļaujiet ar --allow-synced-folder.")
     if resolved.exists() and not overwrite:
         raise diag.DiagnosticsError(f"Fails jau pastāv: {path}. Lietojiet --overwrite vai citu nosaukumu.")
     return path
 
 
-def main(argv=None, out=None):
+def main(argv=None, out=None, input_fn=input, environ=None):
+    if out is None:
+        _safe_console()
     out = out or sys.stdout
     say = lambda text="": print(text, file=out)
     args = build_parser().parse_args(argv)
     if args.allowed_fields:
         say(diag.describe_allowed_fields())
         return 0
+    environ = os.environ if environ is None else environ
     try:
-        if not args.pdf:
-            raise diag.DiagnosticsError("Norādiet PDF failu. Piemērs: python -m tools.ad_diagnostics fails.pdf --page 3")
-        pdf_path = pathlib.Path(args.pdf)
-        if not pdf_path.is_file():
-            raise diag.DiagnosticsError(f"Fails nav atrasts: {pdf_path}")
+        if args.pdf == "":                      # .bat nodod "" (tukšs arguments), ja fails nav ievilkts
+            args.pdf = None
+        if args.interactive:
+            if any((args.page, args.all_pages, args.control, args.html, args.summary_out, args.print_summary, args.overwrite)):
+                raise diag.DiagnosticsError("Interaktīvajā režīmā norādiet tikai PDF (ja vēlaties); pārējo rīks pajautās pats.")
+            options = interactive_session(args.pdf, input_fn=input_fn, say=say, environ=environ)
+            pdf_path, pages, controls = options["pdf_path"], options["pages"], options["controls"]
+            html_path, summary_path, print_summary = options["html_path"], None, options["print_summary"]
+            overwrite = False
+        else:
+            if not args.pdf:
+                raise diag.DiagnosticsError("Norādiet PDF failu. Piemērs: python -m tools.ad_diagnostics fails.pdf --page 3")
+            pdf_path = pathlib.Path(args.pdf)
+            if not pdf_path.is_file():
+                raise diag.DiagnosticsError(f"Fails nav atrasts: {pdf_path}")
+            pages = sorted({n for part in args.page or [] for n in diag.parse_page_list(part)}) or None
+            controls = [diag.parse_control(text) for text in args.control or []]
+            overwrite, print_summary = args.overwrite, args.print_summary
+            html_path = (_check_output(args.html, pdf_path, overwrite, args.allow_synced_folder, environ)
+                         if args.html else None)
+            summary_path = (_check_output(args.summary_out, pdf_path, overwrite, args.allow_synced_folder, environ)
+                            if args.summary_out else None)
         if pdf_path.stat().st_size > MAX_PDF_BYTES:
             raise diag.DiagnosticsError("PDF ir pārāk liels (> 300 MB).")
-        pages = sorted({n for part in args.page or [] for n in diag.parse_page_list(part)}) or None
-        controls = [diag.parse_control(text) for text in args.control or []]
-        html_path = _check_output(args.html, pdf_path, args.overwrite) if args.html else None
-        summary_path = _check_output(args.summary_out, pdf_path, args.overwrite) if args.summary_out else None
         if html_path and summary_path and html_path.resolve() == summary_path.resolve():
             raise diag.DiagnosticsError("HTML pārskatam un kopsavilkumam jābūt dažādiem failiem.")
     except diag.DiagnosticsError as error:
         say(f"KĻŪDA: {error}")
         return 2
+    except KeyboardInterrupt:
+        say("Pārtraukts.")
+        return 2
 
     data = pdf_path.read_bytes()
-    report = diag.run_diagnostics(data, pages=pages, all_pages=args.all_pages, controls=controls,
+    report = diag.run_diagnostics(data, pages=pages, all_pages=bool(getattr(args, "all_pages", False)), controls=controls,
                                   file_name=pdf_path.name)
     say(render_text(report))
 
@@ -298,7 +482,7 @@ def main(argv=None, out=None):
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html_path.write_text(render_html(report, previews), encoding="utf-8")
         say(f"\nHTML pārskats saglabāts LOKĀLI: {html_path} (satur PDF saturu: nekopīgot).")
-    if summary_path or args.print_summary:
+    if summary_path or print_summary:
         summary = diag.build_sanitized_summary(report)
         text = diag.summary_json(summary)
         say("\n=== SANITIZĒTAIS KOPSAVILKUMS (apskatiet pirms kopīgošanas; rīks to nekur nesūta) ===")
