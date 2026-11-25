@@ -115,9 +115,11 @@ def _closed_chain(items):
 
 
 def _extract_geometry(page):
-    contours, segments, ignored = [], [], {"curves": 0, "diagonal_segments": 0, "unstroked": 0}
+    contours, segments, ignored = [], [], {"curves": 0, "diagonal_segments": 0, "unstroked": 0,
+                                           "drawing_paths": 0}
     seen = set()
     for drawing in page.get_drawings():
+        ignored["drawing_paths"] += 1
         if drawing.get("color") is None:           # tikai aizpildījums, nav līnijas
             ignored["unstroked"] += 1
             continue
@@ -342,6 +344,26 @@ def _separator_evidence(edge, segments, texts):
     return None
 
 
+def _vector_summary(contours, segments, ignored):
+    """Tikai skaitļi (bez koordinātām un teksta): vektoru veidu skaits lapā."""
+    return {
+        "drawing_paths": ignored.get("drawing_paths", 0),
+        "contour_rectangle": sum(1 for c in contours if c["kind"] == "rectangle"),
+        "contour_polygon": sum(1 for c in contours if c["kind"] != "rectangle"),
+        "segment_horizontal": sum(1 for s in segments if s["orientation"] == "H"),
+        "segment_vertical": sum(1 for s in segments if s["orientation"] == "V"),
+        "segment_diagonal": ignored.get("diagonal_segments", 0),
+        "curve": ignored.get("curves", 0),
+        "unstroked": ignored.get("unstroked", 0),
+    }
+
+
+def page_vector_summary(page):
+    """Lapas vektoru veidu skaits un attēlu skaits (diagnostikai); neveic kandidātu analīzi."""
+    contours, segments, ignored = _extract_geometry(page)
+    return {**_vector_summary(contours, segments, ignored), "images": len(page.get_images())}
+
+
 # --- lapas analīze -----------------------------------------------------------------------------
 def analyze_page(page, page_number):
     """Vienas lapas vektoru analīze. Atgriež JSON-saderīgu dict (glabājams sesijā)."""
@@ -351,7 +373,8 @@ def analyze_page(page, page_number):
     texts = _extract_texts(page)
     base = {"page": page_number, "mediabox_pt": [_r(media.width, 2), _r(media.height, 2)],
             "rotation": page.rotation, "ignored": ignored, "candidates": [], "excluded": [],
-            "dimensions": [], "notes": []}
+            "dimensions": [], "notes": [],
+            "vector_summary": {**_vector_summary(contours, segments, ignored), "images": len(page.get_images())}}
     if not contours and not segments:
         return {**base, "status": "no_vector_geometry", "scale": None,
                 "notes": ["Lapā nav vektoru ģeometrijas (iespējams, attēls vai skenējums): "
@@ -532,6 +555,8 @@ def _build_candidate(page_number, number, contour, declared):
                 "izvilkuma līnijas nav pierādītas pie šīs kontūras, tāpēc saistība nav droša "
                 "(var piederēt citai kontūrai ar tādu pašu izmēru).")
     scale = _evaluate_scale(declared, implied_values)
+    scale["declared_status"] = declared["status"]
+    candidate["_flags"]["dimension_conflict"] = bool(conflicts)
     candidate["scale"] = scale
     candidate["issues"].extend(scale["notes"])
     if scale["status"] == "pārbaudīts":
@@ -561,6 +586,29 @@ def _finalize_status(candidate):
     label = candidate["boundary"]["label"]
     values = [chosen[o]["value_mm"] for o in ("H", "V") if o in chosen]
 
+    adjacency_open_any = any(n["separator"] is None for n in candidate["boundary"]["neighbours"])
+    codes = []
+    if candidate["shape"] != "rectangle":
+        codes.append("SHAPE_NOT_RECTANGLE")
+    if scale["status"] == "pretrunā":
+        codes.append("SCALE_CONFLICT")
+    elif scale["status"] == "nenosakāms":
+        codes.append("SCALE_MULTIPLE" if scale.get("declared_status") == "vairāki" else "SCALE_UNDETERMINED")
+    elif scale["status"] == "nav norādīts":
+        codes.append("SCALE_NOT_DECLARED")
+    if len(values) < 2:
+        codes.append("DIMENSION_MISSING")
+    if candidate["dimensions"] and not all_linked:
+        codes.append("DIMENSION_WEAK_LINK")
+    if flags.get("dimension_conflict"):
+        codes.append("DIMENSION_CONFLICT")
+    if flags["nested_ambiguous"]:
+        codes.append("NESTED_CONTOURS")
+    if flags["role_conflict"]:
+        codes.append("ROLE_CONFLICT")
+    if adjacency_open_any:
+        codes.append("ADJACENT_BOUNDARY_NOT_MARKED")
+
     if candidate["shape"] != "rectangle":
         issues.append("Kontūra nav taisnstūris (L/U vai cita forma): automātiska sadalīšana netiek veikta; "
                       "ievadi atsevišķus taisnstūrus manuāli.")
@@ -585,12 +633,14 @@ def _finalize_status(candidate):
         if clean and label:
             status = CONSISTENT
         elif clean:
+            codes.append("NO_MODULE_LABEL")
             status = RECOGNISED
             issues.append("Nav pierādīts, ka šī kontūra ir grīdas rāmja robeža (var būt fasādes kontūra): "
                           "nav moduļa marķējuma.")
         else:
             status = UNCLEAR
     candidate["status"] = status
+    candidate["reason_codes"] = list(dict.fromkeys(codes))
     if status in TRANSFERABLE and len(values) == 2:
         candidate["length_mm"], candidate["width_mm"] = max(values), min(values)
         candidate["transferable"] = True

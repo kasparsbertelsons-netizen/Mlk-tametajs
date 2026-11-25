@@ -1,0 +1,2 @@
+# Windows .bat faili jāglabā ar CRLF rindu beigām
+*.bat text eol=crlf
