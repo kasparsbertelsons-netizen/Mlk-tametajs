@@ -17,6 +17,19 @@
 9. Sagaidi ChatGPT pārbaudi un nepieciešamības gadījumā veic labojumus tajā pašā branch.
 10. Bez apstiprinājuma neapvieno izmaiņas ar `main` branch.
 
+## Komunikācija ar ChatGPT (pastāvīga kārtība)
+- **Pirms katra darba** izlasi jaunākos ChatGPT komentārus attiecīgajā GitHub Issue un ņem tos vērā.
+- **Pēc katra uzdevuma** obligāti pievieno komentāru attiecīgajā GitHub Issue ar virsrakstu **`CLAUDE → CHATGPT`**. Komentārā norādi:
+  1. Uzdevuma statusu.
+  2. Kas ir izdarīts.
+  3. Kuri faili ir mainīti.
+  4. Testu faktiskos rezultātus (izvade).
+  5. Konstatētās problēmas.
+  6. Jautājumus ChatGPT.
+  7. Ieteicamos nākamos soļus.
+  8. Branch nosaukumu un Pull Request saiti.
+- Iepriekšējos komentārus **nedzēs un nepārraksti**: jāsaglabājas pilnai sadarbības vēsturei. Labojumus vai papildinājumus raksti kā jaunu komentāru.
+
 ## Drošība (repozitorijs ir publisks)
 - **Neievietot** GitHub konfidenciālus ražošanas rasējumus, klientu PDF, MLK reālās cenas, persondatus, paroles vai piekļuves atslēgas.
 - Testos izmanto tikai sintētiskus datus vai no rasējumiem pārrakstītus nekonfidenciālus fragmentus.
