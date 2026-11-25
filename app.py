@@ -2,6 +2,7 @@ import streamlit as st
 from src.pdf_reader import read_pdf
 from src.estimate import Wall, calculate_wall
 from src.ad_ui import render_ad_mode
+from src.building_ui import render_building_mode
 
 st.set_page_config(page_title="MLK Tāmēšanas Aģents", page_icon="🏠", layout="wide")
 st.title("MLK Tāmēšanas Aģents")
@@ -13,10 +14,13 @@ import fitz
 
 st.subheader("Arhitektūras rasējums → provizoriska grīdas rāmja tāme")
 st.caption("Rebel tipa moduļiem. Šis ir cenu piedāvājuma aprēķins, nevis konstruktora projekts.")
-mode = st.radio("Aprēķina režīms", ["AD — prognozēt rāmi", "PD — nolasīt specifikāciju"], horizontal=True)
+mode = st.radio("Aprēķina režīms", ["AD — prognozēt rāmi", "PD — nolasīt specifikāciju", "Pilnas ēkas tāme"], horizontal=True)
 
 if mode == "AD — prognozēt rāmi":
     render_ad_mode()
+
+elif mode == "Pilnas ēkas tāme":
+    render_building_mode()
 
 else:
     pdf = st.file_uploader("Augšupielādē rasējumu PDF", type=["pdf"], help="PDF tiek analizēts šajā sesijā; programma to neievieto GitHub.")
