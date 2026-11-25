@@ -30,29 +30,35 @@ CONFIRMATIONS_KEY = "ad_confirmations"  # {moduļa indekss: ievades pirkstu nosp
 
 
 def _load_scan(upload):
-    """(scan, pdf_id, kļūda). Rezultāts glabājas tikai sesijā un tiek dzēsts, mainot/noņemot PDF."""
+    """(scan, pdf_id, kļūda). Rezultāts glabājas tikai sesijā un tiek dzēsts, mainot/noņemot PDF.
+
+    pdf_id ir pilns SHA-256 no faila satura jebkuram augšupielādētam failam, arī nederīgam vai
+    par lielu: identitāte nekad nav tikai nosaukums + izmērs.
+    """
     state = st.session_state
     if upload is None:
         state.pop(SCAN_KEY, None)
         return None, None, None
     cached = state.get(SCAN_KEY)
     if cached and cached["file_id"] == upload.file_id:
-        return cached["scan"], cached["pdf_id"], None
+        return cached["scan"], cached["pdf_id"], cached["error"]
     state.pop(SCAN_KEY, None)
-    if upload.size > MAX_PDF_BYTES:
-        return None, f"{upload.name}:{upload.size}", "Maksimālais PDF izmērs ir 30 MB."
     data = upload.getvalue()
-    pdf_id = hashlib.sha256(data).hexdigest()[:16]
-    try:
-        pdf = read_pdf(data)
-    except (ValueError, RuntimeError) as error:
-        return None, pdf_id, f"PDF neizdevās nolasīt: {error}"
-    except Exception as error:  # bojāts PDF u. c.
-        return None, pdf_id, f"PDF analīzes kļūda: {error}"
-    scan = scan_plan_pages([page["text"] for page in pdf["pages"]])
-    scan["page_count"] = len(pdf["pages"])
-    state[SCAN_KEY] = {"file_id": upload.file_id, "pdf_id": pdf_id, "scan": scan}
-    return scan, pdf_id, None
+    pdf_id = hashlib.sha256(data).hexdigest()
+    scan, error = None, None
+    if upload.size > MAX_PDF_BYTES:
+        error = "Maksimālais PDF izmērs ir 30 MB."
+    else:
+        try:
+            pdf = read_pdf(data)
+            scan = scan_plan_pages([page["text"] for page in pdf["pages"]])
+            scan["page_count"] = len(pdf["pages"])
+        except (ValueError, RuntimeError) as exc:
+            error = f"PDF neizdevās nolasīt: {exc}"
+        except Exception as exc:  # bojāts PDF u. c.
+            error = f"PDF analīzes kļūda: {exc}"
+    state[SCAN_KEY] = {"file_id": upload.file_id, "pdf_id": pdf_id, "scan": scan, "error": error}
+    return scan, pdf_id, error
 
 
 def _render_candidates(scan: dict):
@@ -130,6 +136,9 @@ def _module_inputs(index: int, sources: list, pdf_id) -> dict:
             st.success(f"Apstiprināts: L = {length} mm, W = {width} mm, perimetrs = {perimeter} mm, "
                        f"avots: {source}.")
         elif stored is not None:
+            # Neatbilstošais nospiedums tiek dzēsts: atgriežoties pie sākotnējiem datiem (A → B → A)
+            # apstiprinājums neatjaunojas pats, vajadzīga jauna apstiprināšana.
+            del confirmations[index]
             st.warning("Ievade mainīta pēc apstiprinājuma (L, W, perimetrs, avots vai PDF): "
                        "apstiprinājums atcelts. Apstiprini vēlreiz.")
         else:

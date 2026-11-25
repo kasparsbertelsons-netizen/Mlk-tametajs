@@ -7,13 +7,17 @@ apstiprināšanas plūsmu. Skaitļu pareizība kodolā: tests/test_floor_frame.p
 Importi ir tiešie: ja streamlit/PyMuPDF/AppTest nav pieejams, testi KRĪT, nevis
 tiek klusi izlaisti (skat. TestEnvironment).
 """
+import hashlib
 import re
 import unittest
+from unittest import mock
 from importlib.metadata import version
 from pathlib import Path
 
 import pymupdf
 from packaging.requirements import Requirement
+
+import src.ad_ui  # noqa: F401  (patch("src.ad_ui.MAX_PDF_BYTES") testiem)
 from streamlit.testing.v1 import AppTest
 from streamlit.testing.v1.element_tree import FileUploader
 
@@ -379,6 +383,147 @@ class TestConfirmationBoundToInput(unittest.TestCase):
         self.assertEqual(metrics(at), [])
 
 
+class TestConfirmationDoesNotComeBack(unittest.TestCase):
+    """A → B → A: atgriežoties pie sākotnējiem datiem bez pogas apstiprinājums NEATJAUNOJAS.
+
+    Piezīme: make_pdf nav deterministisks (katrs izsaukums dod citus baitus), tāpēc testos, kur
+    jāatgriežas pie "tā paša" PDF, tiek lietots viens un tas pats baitu objekts.
+    """
+
+    def assert_needs_new_confirmation(self, at):
+        self.assertEqual(metrics(at), [])
+        self.assertEqual(beam_tables(at), [])
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+        self.assertNotIn(0, at.session_state["ad_confirmations"])      # vecais nospiedums dzēsts
+
+    def test_length_A_B_A(self):
+        at = enter(start([FLOOR]), 0, 12000, 4000)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        at.number_input(key="ad_L_0").set_value(12100).run()
+        self.assertTrue(any("apstiprinājums atcelts" in w for w in warnings(at)))
+        self.assertEqual(metrics(at), [])
+        at.number_input(key="ad_L_0").set_value(12000).run()           # atpakaļ uz A, bez pogas
+        self.assert_needs_new_confirmation(at)
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+
+    def test_width_A_B_A(self):
+        at = enter(start([FLOOR]), 0, 12000, 4000)
+        at.number_input(key="ad_W_0").set_value(3600).run()
+        at.number_input(key="ad_W_0").set_value(4000).run()
+        self.assert_needs_new_confirmation(at)
+
+    def test_source_A_B_A(self):
+        at = enter(start([FLOOR]), 0, 12000, 4000)
+        at.selectbox(key="ad_src_0").set_value("PDF 1. lapa").run()
+        self.assertEqual(metrics(at), [])
+        at.selectbox(key="ad_src_0").set_value("Ievadīts manuāli").run()
+        self.assert_needs_new_confirmation(at)
+
+    def test_perimeter_A_B_A(self):
+        at = enter(start([FLOOR]), 0, 12000, 4000)
+        at.number_input(key="ad_perim_0").set_value(150).run()
+        at.number_input(key="ad_perim_0").set_value(200).run()
+        self.assert_needs_new_confirmation(at)
+
+    def test_pdf_removed_and_same_bytes_restored(self):
+        data = make_pdf([FLOOR])
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        at.file_uploader[0].upload("a.pdf", data, "application/pdf").run()
+        enter(at, 0, 12000, 4000)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        at.file_uploader[0].set_value(None).run()
+        self.assertEqual(metrics(at), [])
+        at.file_uploader[0].upload("a.pdf", data, "application/pdf").run()   # tie paši baiti
+        self.assert_needs_new_confirmation(at)
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+
+    def test_pdf_replaced_by_other_and_back(self):
+        a, b = make_pdf([FLOOR]), make_pdf([FLOOR + "\nRevision B"])
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        at.file_uploader[0].upload("a.pdf", a, "application/pdf").run()
+        enter(at, 0, 12000, 4000)
+        at.file_uploader[0].upload("b.pdf", b, "application/pdf").run()
+        self.assertEqual(metrics(at), [])
+        at.file_uploader[0].upload("a.pdf", a, "application/pdf").run()
+        self.assert_needs_new_confirmation(at)
+
+    def test_wide_A_B_A(self):
+        at = enter(start(), 0, 12000, 4600, confirmed=False)
+        at.checkbox(key="ad_wide_0_4600").check().run()
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.32632 m³")
+        at.number_input(key="ad_W_0").set_value(4700).run()
+        at.number_input(key="ad_W_0").set_value(4600).run()
+        self.assertFalse(at.checkbox(key="ad_wide_0_4600").value)      # atzīme neatjaunojas
+        self.assert_needs_new_confirmation(at)
+
+    def test_identical_content_direct_replacement_keeps_confirmation(self):
+        # ChatGPT: identiska PDF satura tieša nomaiņa drīkst saglabāt apstiprinājumu,
+        # ja avots un pārējā ievade nemainās.
+        data = make_pdf([FLOOR])
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        at.file_uploader[0].upload("a.pdf", data, "application/pdf").run()
+        enter(at, 0, 12000, 4000)
+        at.file_uploader[0].upload("copy.pdf", data, "application/pdf").run()
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+
+    def test_other_modules_confirmation_is_untouched(self):
+        at = start([FLOOR])
+        at.number_input(key="ad_module_count").set_value(2).run()
+        enter(at, 0, 12000, 4000)
+        enter(at, 1, 12100, 3600)
+        at.number_input(key="ad_L_1").set_value(12000).run()           # maina tikai 2. moduli
+        self.assertEqual(sorted(at.session_state["ad_confirmations"]), [0])
+        self.assertEqual(metric(at, "Sijas moduļā (gab.)"), "21")
+
+
+class TestPdfIdentity(unittest.TestCase):
+    """PDF identitāte ir pilns SHA-256 no satura, arī nederīgam vai par lielam failam."""
+
+    @staticmethod
+    def upload(at, name, content):
+        at.file_uploader[0].upload(name, content, "application/pdf").run()
+        assert not at.exception, at.exception
+        return at.session_state["ad_scan"]["pdf_id"]
+
+    def test_valid_pdf_uses_full_sha256(self):
+        data = make_pdf([FLOOR])
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        pdf_id = self.upload(at, "a.pdf", data)
+        self.assertEqual(len(pdf_id), 64)
+        self.assertEqual(pdf_id, hashlib.sha256(data).hexdigest())
+
+    def test_invalid_files_with_same_name_and_size_have_different_identity(self):
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        first = self.upload(at, "same.pdf", b"not a pdf: AAAA")
+        self.assertTrue(any("PDF neizdevās nolasīt" in e for e in errors(at)))
+        second = self.upload(at, "same.pdf", b"not a pdf: BBBB")       # tas pats nosaukums un izmērs
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, hashlib.sha256(b"not a pdf: AAAA").hexdigest())
+        self.assertEqual(len(second), 64)
+
+    def test_confirmation_is_cancelled_when_invalid_file_is_replaced_by_same_size_file(self):
+        at = AppTest.from_file(APP, default_timeout=60).run()
+        self.upload(at, "same.pdf", b"not a pdf: AAAA")
+        enter(at, 0, 12000, 4000)                                     # izmēri ievadīti manuāli
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        self.upload(at, "same.pdf", b"not a pdf: BBBB")
+        self.assertEqual(metrics(at), [])
+        self.assertTrue(any("apstiprinājums atcelts" in w for w in warnings(at)))
+
+    def test_oversized_files_with_same_name_and_size_have_different_identity(self):
+        with mock.patch("src.ad_ui.MAX_PDF_BYTES", 100):
+            at = AppTest.from_file(APP, default_timeout=60).run()
+            first = self.upload(at, "big.pdf", b"A" * 200)
+            self.assertTrue(any("Maksimālais PDF izmērs" in e for e in errors(at)))
+            second = self.upload(at, "big.pdf", b"B" * 200)
+            self.assertNotEqual(first, second)
+            self.assertEqual(first, hashlib.sha256(b"A" * 200).hexdigest())
+            self.assertEqual(len(second), 64)
+
+
 class TestIncompleteCalculation(unittest.TestCase):
     """Ja derīgu apstiprinātu moduļu ir mazāk nekā pieprasīts: NEPILNS APRĒĶINS, bez kopsummas un CSV."""
 
@@ -448,6 +593,7 @@ class TestSessionDataHandling(unittest.TestCase):
         self.assertIn("ad_scan", at.session_state)
         first_id = at.session_state["ad_scan"]["pdf_id"]
         at.file_uploader[0].upload("other.pdf", make_pdf([FLOOR + "\nRevision B"]), "application/pdf").run()
+        self.assertEqual(len(first_id), 64)
         self.assertNotEqual(at.session_state["ad_scan"]["pdf_id"], first_id)
         at.file_uploader[0].set_value(None).run()
         self.assertNotIn("ad_scan", at.session_state)
