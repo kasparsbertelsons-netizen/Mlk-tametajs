@@ -1,8 +1,9 @@
 """Streamlit saskarne AD režīmam (Issue #4).
 
-Plūsma: PDF (nav obligāts) → pagaidu kandidāti ar avota lapu → lietotājs ievada
-katra moduļa L un W un spiež "Apstiprināt" → pamatrāmja aprēķins
-(`src/floor_frame.py`).
+Plūsma: PDF (nav obligāts) → pagaidu teksta kandidāti un vektoru kandidāti (prototips,
+`src/ad_vector.py`) ar avota lapu un priekšskatījumu → lietotājs ievada vai pārnes katra moduļa
+L un W un spiež "Apstiprināt" → pamatrāmja aprēķins (`src/floor_frame.py`). Kandidāta L/W
+pārnešana apstiprinājumu NEizdara un atceļ iepriekšējo apstiprinājumu (ievade mainās).
 
 Apstiprinājums ir piesaistīts konkrētai ievades versijai (L, W, perimetrs,
 avots, PDF identitāte, nestandarta/platuma apstiprinājumi). Mainoties jebkuram no
@@ -16,6 +17,7 @@ import io
 import streamlit as st
 
 from src.ad_plan import scan_plan_pages
+from src.ad_vector import PROVEN, analyze_pdf, render_preview_png
 from src.floor_frame import (
     PERIMETER_WIDTH_MM, SCOPE_NOTE, WIDTH_REVIEW_LIMIT_MM, FrameParams,
     calculate_module, export_rows, summarize_modules,
@@ -53,6 +55,11 @@ def _load_scan(upload):
             pdf = read_pdf(data)
             scan = scan_plan_pages([page["text"] for page in pdf["pages"]])
             scan["page_count"] = len(pdf["pages"])
+            try:   # vektoru prototips nedrīkst salauzt teksta kandidātus
+                scan["vector"] = analyze_pdf(data, [page["page"] for page in scan["floor_pages"]])
+                scan["vector_error"] = None
+            except Exception as exc:
+                scan["vector"], scan["vector_error"] = None, f"Vektoru analīze neizdevās: {exc}"
         except (ValueError, RuntimeError) as exc:
             error = f"PDF neizdevās nolasīt: {exc}"
         except Exception as exc:  # bojāts PDF u. c.
@@ -61,7 +68,7 @@ def _load_scan(upload):
     return scan, pdf_id, error
 
 
-def _render_candidates(scan: dict):
+def _render_candidates(scan: dict, pdf_bytes=None):
     floor_pages, skipped = scan["floor_pages"], scan["skipped_pages"]
     st.caption(
         f"Nolasītas {scan['page_count']} lapas. Tas ir **pagaidu kandidātu saraksts** no PDF teksta "
@@ -90,6 +97,101 @@ def _render_candidates(scan: dict):
             st.dataframe(excluded, hide_index=True, use_container_width=True)
     st.caption("Terases tiek izslēgtas tikai pēc atslēgvārda tajā pašā teksta rindā: tas negarantē, "
                "ka visas terases ir izslēgtas. Pārbaudi, vai L un W neietver terasi.")
+    _render_vector_section(scan, pdf_bytes)
+
+
+def _vector_source_label(candidate: dict) -> str:
+    return f"PDF {candidate['page']}. lapa, vektoru kandidāts {candidate['id']}"
+
+
+def _vector_candidates(scan) -> list:
+    vector = (scan or {}).get("vector") or {}
+    return [c for page in vector.get("pages", []) for c in page["candidates"]]
+
+
+def _candidate_label(candidate: dict) -> str:
+    size = f"{candidate['length_mm']}×{candidate['width_mm']} mm" if candidate["transferable"] \
+        else "L/W netiek piedāvāti"
+    return f"{candidate['id']}: {size}, {candidate['status']} (lapa {candidate['page']})"
+
+
+def _transfer(candidate: dict, index: int):
+    """Pārnes kandidāta L/W un avotu uz moduļa ievadi. Apstiprinājumu NEizdara (poga paliek obligāta)."""
+    st.session_state[f"ad_L_{index}"] = int(candidate["length_mm"])
+    st.session_state[f"ad_W_{index}"] = int(candidate["width_mm"])
+    st.session_state[f"ad_src_{index}"] = _vector_source_label(candidate)
+    st.session_state["ad_vec_notice"] = (
+        f"Kandidāts {candidate['id']} pārnests uz {index + 1}. moduli (L = {candidate['length_mm']} mm, "
+        f"W = {candidate['width_mm']} mm). Apstiprinājums vēl NAV izdarīts: pārbaudi un spied "
+        "'Apstiprināt šo ievadi'.")
+
+
+def _render_vector_section(scan: dict, pdf_bytes):
+    st.subheader("Vektoru ģeometrijas kandidāti (prototips)")
+    st.caption("Prototips: kontūras un izmēru norādes tiek nolasītas no PDF vektoriem, un mērogs tiek "
+               "pārbaudīts pret izmēru norādēm. Sintētisku paraugu rezultāts NAV pierādījums, ka tiks "
+               "atpazīti reāli AD rasējumi. Kandidāti netiek apstiprināti automātiski; manuālā ievade "
+               "paliek pieejama.")
+    if scan.get("vector") is None:
+        st.warning(scan.get("vector_error") or "Vektoru analīze nav pieejama.")
+        return
+    pages = scan["vector"]["pages"]
+    for page in pages:
+        if page["status"] != "ok":
+            st.warning(f"{page['page']}. lapa: {page['notes'][0]}")
+    candidates = _vector_candidates(scan)
+    if not candidates:
+        st.info("Vektoru kontūru kandidātu nav (nav kontūru ar izmēru norādēm). Ievadi L un W manuāli.")
+    else:
+        st.dataframe([{
+            "Kandidāts": c["id"], "Lapa": c["page"], "Statuss": c["status"],
+            "L (mm)": c["length_mm"] if c["transferable"] else None,
+            "W (mm)": c["width_mm"] if c["transferable"] else None,
+            "Mērogs": (f"1:{c['scale']['denominator']} ({c['scale']['status']})"
+                       if c["scale"]["denominator"] else c["scale"]["status"]),
+            "Moduļa marķējums": c["boundary"]["label"] or "",
+            "Blakus": ", ".join(c["boundary"]["adjacent_to"]),
+            "Problēmas": " | ".join(c["issues"])} for c in candidates],
+            hide_index=True, use_container_width=True)
+        labels = [_candidate_label(c) for c in candidates]
+        picked = st.selectbox("Kandidāts (priekšskatījumam un pārnešanai)", labels, key="ad_vec_pick")
+        candidate = candidates[labels.index(picked)]
+        analysis = next(p for p in pages if p["page"] == candidate["page"])
+        if pdf_bytes:
+            try:
+                st.image(render_preview_png(pdf_bytes, analysis, candidate["id"]),
+                         caption=f"{candidate['page']}. lapa: izvēlētā kandidāta kontūra, izmēru teksti un "
+                                 "avots. Zaļš = pierādīts/atpazīts, oranžs = neskaidrs, sarkans = atteikums, "
+                                 "zils = izmēru teksts, pelēks raustīts = izslēgts (telpa, terase).")
+            except Exception as exc:
+                st.warning(f"Priekšskatījumu neizdevās izveidot: {exc}")
+        with st.expander("Pierādījumi un problēmas (izvēlētais kandidāts)", expanded=True):
+            st.markdown(f"**{candidate['id']}**, statuss: **{candidate['status']}**, "
+                        f"lapa {candidate['page']}, avots: PDF vektori")
+            for line in candidate["evidence"]:
+                st.markdown(f"- {line}")
+            for line in candidate["issues"]:
+                st.markdown(f"- ⚠ {line}")
+        if candidate["transferable"] and candidate["status"] != PROVEN:
+            st.warning("Kandidāta nozīme nav pilnībā pierādīta (skat. problēmas): pārbaudi pret rasējumu.")
+        count = int(st.session_state.get("ad_module_count", 1))
+        target = st.selectbox("Pārnest uz moduli", list(range(1, count + 1)), key="ad_vec_target")
+        st.button("Pārnest L un W uz moduli (neapstiprina)", key="ad_vec_transfer",
+                  disabled=not candidate["transferable"], on_click=_transfer,
+                  args=(candidate, int(target) - 1))
+    notice = st.session_state.pop("ad_vec_notice", None)
+    if notice:
+        st.info(notice)
+    roles = [(p["page"], e) for p in pages for e in p["excluded"] if e["kind"] not in ("page_frame", "unmeasured")]
+    unmeasured = sum(1 for p in pages for e in p["excluded"] if e["kind"] == "unmeasured")
+    if roles or unmeasured:
+        with st.expander("Izslēgtās kontūras (telpas, terases, ligzdotas kontūras)"):
+            if roles:
+                st.dataframe([{"Lapa": page, "Veids": e["kind"], "Marķējums": e.get("label") or "",
+                               "Izmēri (mm)": ", ".join(str(v) for v in e.get("dimensions", [])),
+                               "Iemesls": e["reason"]} for page, e in roles],
+                             hide_index=True, use_container_width=True)
+            st.caption(f"Kontūras bez piesaistītām izmēru norādēm (nav kandidāti): {unmeasured}.")
 
 
 def _module_inputs(index: int, sources: list, pdf_id) -> dict:
@@ -99,9 +201,9 @@ def _module_inputs(index: int, sources: list, pdf_id) -> dict:
         name = st.text_input("Nosaukums", value=f"Modulis {index + 1}", max_chars=60,
                              key=f"ad_name_{index}")
         c1, c2, c3 = st.columns(3)
-        length = c1.number_input("Garums L (mm)", min_value=0, max_value=100000, value=0,
+        length = c1.number_input("Garums L (mm)", min_value=0, max_value=100000,
                                  step=100, key=f"ad_L_{index}")
-        width = c2.number_input("Platums W (mm)", min_value=0, max_value=100000, value=0,
+        width = c2.number_input("Platums W (mm)", min_value=0, max_value=100000,
                                 step=100, key=f"ad_W_{index}")
         perimeter = c3.number_input(
             f"Perimetra sijas platums (mm); noklusējums {PERIMETER_WIDTH_MM}, nav nolasīts no rasējuma",
@@ -176,9 +278,9 @@ def render_ad_mode():
     if load_error:
         st.error(load_error)
     if scan:
-        _render_candidates(scan)
-    sources = [MANUAL_SOURCE] + [f"PDF {page['page']}. lapa"
-                                 for page in (scan or {}).get("floor_pages", [])]
+        _render_candidates(scan, upload.getvalue())
+    sources = ([MANUAL_SOURCE] + [f"PDF {page['page']}. lapa" for page in (scan or {}).get("floor_pages", [])]
+               + [_vector_source_label(c) for c in _vector_candidates(scan) if c["transferable"]])
 
     st.subheader("Apstiprināmie moduļi")
     st.caption("Katrs fiziskais modulis ir savs taisnstūris. L/U formas moduļus automātiski "

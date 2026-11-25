@@ -7,3 +7,8 @@ uploads/
 outputs/
 *.pdf
 *.xlsx
+
+# Sintētiskie AD vektoru paraugi (tools/synthetic_ad_pdf.py). Tests pārbauda, ka mapē ir TIKAI ģenerēti,
+# SINTĒTISKI faili; reāli klientu PDF te nedrīkst nonākt.
+!samples/ad_vector/
+!samples/ad_vector/*.pdf
