@@ -4,6 +4,8 @@
 **Pārbaudītā versija:** `main` @ `ecd3c30`. **Dati:** tikai sintētiski PDF (ģenerēti testā ar PyMuPDF), bez klientu rasējumiem.
 **`app.py` un `src/` nav mainīti.** Šis dokuments un testi fiksē esošo uzvedību un apstiprinātos noteikumus; aprēķina labošana ir atsevišķs uzdevums.
 
+> **Atjauninājums (Issue #4):** šajā dokumentā aprakstītā esošā uzvedība ir **labota**; skat. `docs/FLOOR_FRAME_CORE.md`. Zemāk esošais ir audita vēsture un tiek saglabāts nemainīts. Testi no audita ir aizstāti ar `tests/test_floor_frame.py`, `tests/test_ad_plan.py` un `tests/test_ad_floor_frame.py`.
+
 ## Svarīgi: kas ir apstiprināts un kas nav
 - Esošie testi un 1. versijas skaitļi (23 gab., 2,23632 m³) ir **esošās koda uzvedības fiksācija, nevis pareizs biznesa aprēķins.**
 - Apstiprinātie noteikumi nāk no ChatGPT (arhitekta) komentāra Issue #2. Tie nav ņemti no MLK dokumenta; ja MLK noteikumi atšķiras, jāpielabo.

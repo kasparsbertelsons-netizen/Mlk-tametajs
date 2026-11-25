@@ -1,2 +1,2 @@
-streamlit>=1.39,<2
-PyMuPDF>=1.24,<2
+streamlit>=1.67.0,<2
+PyMuPDF>=1.28.2,<2

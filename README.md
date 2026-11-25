@@ -11,7 +11,12 @@ streamlit run app.py
 
 Testi: `python -m unittest discover -s tests`.
 
+### Testēšanas vide
+Testēts ar **Python 3.13**, **Streamlit 1.67.0** un **PyMuPDF 1.28.2** (`requirements.txt` zemākās versijas ir šīs). Saskarnes testi izmanto Streamlit `AppTest` ar failu augšupielādi (`FileUploader.upload`) un `import pymupdf`; ja vide neatbilst, tie **krīt**, nevis tiek klusi izlaisti (`TestEnvironment`). Testos izmanto tikai sintētiskus PDF.
+
 ## Kas ir gatavs
+AD režīms: provizoriska moduļa **grīdas pamatrāmja** (bez pastiprinājumiem) aprēķins no lietotāja apstiprinātiem L un W; skat. `docs/FLOOR_FRAME_CORE.md`. PD režīms nolasa siju specifikācijas tabulu.
+
 Manuāli apstiprinātas sienas ģeometrijas aprēķins: neto laukums, aptuvens statņu skaits, aptuvens izolācijas tilpums. PDF analīze, cenas, Excel eksports, lietotāju autentifikācija un publiska tīmekļa adrese vēl nav izveidota.
 
 ## Drošība

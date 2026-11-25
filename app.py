@@ -1,13 +1,12 @@
 import streamlit as st
 from src.pdf_reader import read_pdf
 from src.estimate import Wall, calculate_wall
+from src.ad_ui import render_ad_mode
 
 st.set_page_config(page_title="MLK Tāmēšanas Aģents", page_icon="🏠", layout="wide")
 st.title("MLK Tāmēšanas Aģents")
 st.caption("1. posms — rāmja norāžu nolasīšana no PDF")
 
-import math
-import re
 import csv
 import io
 import fitz
@@ -17,66 +16,7 @@ st.caption("Rebel tipa moduļiem. Šis ir cenu piedāvājuma aprēķins, nevis k
 mode = st.radio("Aprēķina režīms", ["AD — prognozēt rāmi", "PD — nolasīt specifikāciju"], horizontal=True)
 
 if mode == "AD — prognozēt rāmi":
-    ad_pdf = st.file_uploader("Augšupielādē arhitektūras daļas PDF (AD)", type=["pdf"], key="ad_pdf")
-    if ad_pdf is not None:
-        if ad_pdf.size > 30 * 1024 * 1024:
-            st.error("Maksimālais PDF izmērs ir 30 MB.")
-            st.stop()
-        try:
-            with fitz.open(stream=ad_pdf.getvalue(), filetype="pdf") as doc:
-                floor_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\bFloor plan\b", p.get_text("text", sort=True), re.I)]
-                roof_pages = [(i + 1, p.get_text("text", sort=True)) for i, p in enumerate(doc) if re.search(r"\bRoof plan\b", p.get_text("text", sort=True), re.I)]
-                if not floor_pages:
-                    st.error("Nav atrasta atpazīstama grīdas plāna lapa.")
-                    st.stop()
-                page_no, floor_text = max(floor_pages, key=lambda item: len(item[1]))
-                def dimension_candidates(txt):
-                    # Standalone millimetre dimensions, excluding decimals, room areas and window sizes.
-                    return [int(m.group()) for m in re.finditer(r"(?<![\d.,x×])\d{4,5}(?![\d.,x×])", txt)]
-                candidates = dimension_candidates(floor_text)
-                roof_candidates = dimension_candidates(max(roof_pages, key=lambda item: len(item[1]))[1]) if roof_pages else []
-                # The Rebel module outer length is the largest plausible main floor dimension.
-                long_values = [v for v in roof_candidates + candidates if 6000 <= v <= 20000]
-                length = max(long_values) if long_values else None
-                # For a Rebel module, select the standard outer width found on the floor or roof plan.
-                widths = [v for v in roof_candidates + candidates if v in (3500, 4000)]
-                width = max(set(widths), key=widths.count) if widths else None
-                if not length or not width or length <= width:
-                    st.error("No plāna nav droši nosakāmi Rebel moduļa gabarīti. Aprēķins netiek veikts ar izdomātiem izmēriem.")
-                    st.stop()
-                # Estimate from known Rebel rules, without asking the user for beam dimensions.
-                clear_span = width - 400
-                spacing = 600
-                interior_count = max(0, math.ceil(length / spacing) - 1)
-                # Structural reinforcements are NOT inferred as fact from the floor plan.
-                rows = [
-                    ("Garās perimetra sijas", 200, 240, length, 2, "Rebel standarts"),
-                    ("Gala sijas", 200, 240, clear_span, 2, "Rebel standarts"),
-                    ("Regulārās šķērssijas", 45, 240, clear_span, interior_count, "600 mm solis, provizoriski"),
-                ]
-                result = [{"Elements": n, "b (mm)": w, "h (mm)": h, "L (mm)": l, "Gab.": q, "m³": round(w*h*l*q/1e9, 6), "Pamatojums": note} for n,w,h,l,q,note in rows]
-                st.success("Arhitektūras rasējums analizēts. Provizoriskā siju tabula sagatavota automātiski.")
-                st.subheader("Automātiski noteiktie izmēri")
-                x,y,z = st.columns(3)
-                x.metric("Moduļa garums", f"{length} mm")
-                y.metric("Moduļa platums", f"{width} mm")
-                z.metric("Siju solis", "600 mm")
-                st.caption(f"Izmēru avots: Floor plan, PDF {page_no}. lapa; platums pārbaudīts pret jumta plānu, ja tas pieejams. Atpazīšana ir provizoriska.")
-                st.subheader("Provizoriskā Rebel grīdas rāmja siju tabula")
-                st.dataframe(result, hide_index=True, use_container_width=True)
-                a,b,c=st.columns(3)
-                a.metric("Sijas (gab.)",sum(r["Gab."] for r in result))
-                b.metric("Kokmateriāli",f'{sum(r["m³"] for r in result):.3f} m³')
-                c.metric("Siju pozīcijas",len(result))
-                st.warning("Šī ir sākotnējā cenu tāme, nevis pilna konstrukcijas specifikācija. CLT sienu pastiprinātās sijas, sanmezglu īsie pastiprinājumi un iespējamās nestandarta zonas vēl nav automātiski noteiktas un NAV ieskaitītas tabulā. Tādēļ kopējais apjoms var būt par mazu.")
-                out=io.StringIO()
-                writer=csv.writer(out,delimiter=";")
-                writer.writerow(list(result[0].keys()))
-                for row in result:
-                    writer.writerow(list(row.values()))
-                st.download_button("Lejupielādēt automātisko siju tabulu (CSV Excel)", "\ufeff"+out.getvalue(), file_name="MLK_AD_automatiskas_sijas.csv", mime="text/csv")
-        except Exception as exc:
-            st.error(f"PDF analīzes kļūda: {exc}")
+    render_ad_mode()
 
 else:
     pdf = st.file_uploader("Augšupielādē rasējumu PDF", type=["pdf"], help="PDF tiek analizēts šajā sesijā; programma to neievieto GitHub.")
