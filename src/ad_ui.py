@@ -20,7 +20,11 @@ from src.ad_plan import scan_plan_pages
 from src.ad_vector import CONSISTENT, analyze_pdf, render_preview_png
 from src.floor_frame import (
     PERIMETER_WIDTH_MM, SCOPE_NOTE, WIDTH_REVIEW_LIMIT_MM, FrameParams,
-    calculate_module, export_rows, summarize_modules,
+    calculate_module, export_rows, scope_note, summarize_modules,
+)
+from src.frame_diagram import build_frame_svg
+from src.reinforcement import (
+    CONVENTION_NOTE, MAX_REINFORCEMENTS, RF_SOURCE_USER, ReinforcementError, format_axis, parse_axis,
 )
 from src.pdf_reader import read_pdf
 
@@ -29,6 +33,22 @@ MAX_MODULES = 10
 MANUAL_SOURCE = "Ievadīts manuāli"
 SCAN_KEY = "ad_scan"                   # sesijas ietvaros; dzēšams
 CONFIRMATIONS_KEY = "ad_confirmations"  # {moduļa indekss: ievades pirkstu nospiedums}
+
+
+def parse_reinforcement_text(text):
+    """(asis, kļūdas). Katra rinda vai komats/semikols/atstarpe atdala vienu asi (mm no moduļa gala).
+    Nederīga ievade netiek ignorēta: tā tiek atgriezta kā kļūda un aprēķins netiek veikts."""
+    axes, errors = [], []
+    tokens = [t for t in (text or "").replace(";", "\n").replace(" ", "\n").splitlines() if t.strip()]
+    # komats ir decimālzīme ("822,5"); tāpēc to NEuzskata par atdalītāju
+    for token in tokens:
+        try:
+            axes.append(parse_axis(token))
+        except ValueError as error:
+            errors.append(f"\"{token[:20]}\": {error}")
+    if len(axes) > MAX_REINFORCEMENTS:
+        errors.append(f"Pārāk daudz pastiprinājumu (maks. {MAX_REINFORCEMENTS} vienam modulim).")
+    return axes, errors
 
 
 def _load_scan(upload):
@@ -262,6 +282,28 @@ def _module_inputs(index: int, sources: list, pdf_id, vector_by_source: dict) ->
                        "apstiprinājums atcelts. Apstiprini vēlreiz.")
         else:
             st.info("Gaida apstiprinājumu: aprēķins netiek veikts.")
+        # --- pastiprinājumi 150×240: tikai lietotāja manuāla ievade un apstiprinājums (Issue #10) ---
+        st.markdown("**Pastiprinājuma sijas 150×240 (nav obligāti)**")
+        st.caption("Programma NEnosaka nesošās sienas un pastiprinājumus pati. Ja zini, ka vajag, ievadi sijas "
+                   "CENTRA koordinātu. " + CONVENTION_NOTE + " Piemērs: 822,5 aizvieto pirmo regulāro sijas; "
+                   "1150 pievieno papildus. Katra vērtība savā rindā. Tukšs lauks = tikai pamatrāmis "
+                   "(tas NEpierāda, ka pastiprinājumi nav vajadzīgi).")
+        rf_text = st.text_area("Pastiprinājumu asis (mm no moduļa gala), katra savā rindā", height=110,
+                               key=f"ad_rf_{index}")
+        rf_axes, rf_errors = parse_reinforcement_text(rf_text)
+        for message in rf_errors:
+            st.error(f"Pastiprinājumi: {message} Aprēķins šim modulim netiek veikts.")
+        rf_key = tuple(rf_axes)
+        rf_confirmed = False
+        if rf_axes and not rf_errors:
+            shown = ", ".join(format_axis(a) for a in sorted(set(rf_axes)))
+            # Atslēga satur asis, L, W un perimetru: jebkura izmaiņa atceļ šī moduļa apstiprinājumu.
+            digest = hashlib.sha256(repr((sorted(rf_key), int(length), int(width), int(perimeter))).encode()).hexdigest()[:12]
+            rf_confirmed = st.checkbox(
+                f"Apstiprinu pastiprinājumu pozīcijas (ass, mm no moduļa gala): {shown}",
+                key=f"ad_rfok_{index}_{digest}")
+            if not rf_confirmed:
+                st.info("Pastiprinājumu pozīcijas gaida apstiprinājumu: aprēķins šim modulim netiek veikts.")
         # avots: ja L/W atšķiras no izvēlētā vektoru kandidāta, tas nav "tieši nolasīts"
         candidate = vector_by_source.get(source)
         effective = source
@@ -275,7 +317,8 @@ def _module_inputs(index: int, sources: list, pdf_id, vector_by_source: dict) ->
     return {"name": name.strip() or f"Modulis {index + 1}", "length": int(length),
             "width": int(width), "perimeter": int(perimeter), "source": source,
             "source_effective": effective, "candidate": candidate,
-            "nonstandard": nonstandard, "confirmed": confirmed}
+            "nonstandard": nonstandard, "confirmed": confirmed,
+            "rf_axes": rf_axes, "rf_errors": rf_errors, "rf_confirmed": rf_confirmed}
 
 
 def _render_module_result(result):
@@ -290,6 +333,11 @@ def _render_module_result(result):
         st.warning(f"{result.name}: {warning.message}")
     for note in result.notes:
         st.caption(note)
+    if result.reinforcements:
+        st.caption(f"Pastiprinājumi: aizvieto {result.replaced_count}, papildus {result.added_count}; regulāras "
+                   f"šķērssijas {result.regular_count} gab. Avots: {result.reinforcement_source}.")
+    st.markdown("**Grīdas rāmja shēma** (mērogā; viena shēma = šī paša aprēķina ģeometrija)")
+    st.markdown(build_frame_svg(result), unsafe_allow_html=True)
     with st.expander("Šķērssiju novietojums (mm no moduļa gala)"):
         st.write(", ".join(f"{k}.: {s}–{e}" for k, (s, e) in enumerate(result.cross_positions, 1))
                  or "Šķērssiju nav.")
@@ -334,11 +382,20 @@ def render_ad_mode():
                 continue
         if not data["confirmed"]:
             continue
+        if data["rf_errors"]:
+            continue                       # kļūda jau parādīta; nepilns aprēķins netiek eksportēts
+        if data["rf_axes"] and not data["rf_confirmed"]:
+            continue
         try:
             results.append(calculate_module(
                 data["length"], data["width"], name=data["name"], source=data["source_effective"],
                 params=FrameParams(perimeter_width_mm=data["perimeter"]),
-                nonstandard_confirmed=data["nonstandard"]))
+                nonstandard_confirmed=data["nonstandard"], reinforcements=data["rf_axes"],
+                reinforcement_source=RF_SOURCE_USER))
+        except ReinforcementError as error:
+            for conflict in error.conflicts:
+                st.error(f"{data['name']}: {conflict.message}")
+            st.caption("Pilns aprēķins šim modulim ir bloķēts; programma neizdomā labojumu. Izlabo vai noņem ass.")
         except ValueError as error:
             st.error(f"{data['name']}: {error}")
 
@@ -352,18 +409,22 @@ def render_ad_mode():
         return
 
     total = summarize_modules(results)
-    st.subheader("Kopsavilkums (tikai pamatrāmis)")
+    reinforced = total["modules_with_reinforcements"] > 0
+    st.subheader("Kopsavilkums (pamatrāmis + lietotāja pastiprinājumi)" if reinforced else "Kopsavilkums (tikai pamatrāmis)")
     x, y, z = st.columns(3)
     x.metric("Aprēķinātie moduļi", total["modules"])
     y.metric("Sijas kopā (gab.)", total["pieces"])
     z.metric("Kokmateriāli kopā", f"{total['volume_m3']:.5f} m³")
+    if reinforced:
+        st.caption(f"Regulāras šķērssijas: {total['regular']} gab.; pastiprinājumi: aizvieto {total['replaced']}, "
+                   f"papildus {total['added']} (lietotāja norādīti, nav nolasīti no PDF).")
     st.dataframe([{"Modulis": r.name, "L (mm)": r.length_mm, "W (mm)": r.width_mm,
                    "Sijas (gab.)": r.total_pieces, "m³": r.total_volume_m3,
                    "Atlikums (mm)": r.remainder_mm, "Jāpārbauda": "JĀ" if r.needs_review else "",
                    "Avots": r.source} for r in results], hide_index=True, use_container_width=True)
     if total["needs_review"]:
         st.warning(f"Moduļi ar atzīmi 'jāpārbauda': {total['needs_review']}.")
-    st.warning(SCOPE_NOTE)
+    st.warning(scope_note(reinforced))
 
     buffer = io.StringIO()
     csv.writer(buffer, delimiter=";").writerows(export_rows(results))
