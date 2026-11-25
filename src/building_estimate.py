@@ -15,7 +15,10 @@ tos neievada lietotājs. Rezultāts ir provizorisks materiālu apjoms, nevis gal
 
 Mērvienības netiek apvienotas: katrai rindai sava vienība (m², m³, m, gab.); kopsavilkums ir pa grupām UN vienībām.
 """
+import hashlib
+import json
 import math
+import uuid
 from dataclasses import dataclass, field
 from fractions import Fraction
 
@@ -44,6 +47,12 @@ ST_MANUAL = "manuāli"
 ST_ASSUMED = "pieņēmums (nav apstiprināts)"
 ST_DUP = "izslēgts (dublikāts)"
 ST_UNAPPROVED = "ievadīts (nav apstiprināts)"
+ST_NO_RATE = "nav likmes"
+COST_CATEGORIES = ["Ārpakalpojumi", "Transports", "Montāža", "Cits"]
+# Pēc noklusējuma 0% rezerve: iekārtām, logiem/durvīm, sanitārtehnikai (Issue #14); pārējiem materiāliem — rediģējams 10%
+ZERO_WASTE_GROUPS = (G_OPEN, G_SANIT, G_EQUIP)
+LABOUR_UNITS = ("h", "st.", "st", "stunda", "stundas", "darba stundas", "cilvēkstundas")
+LINE_LISTS = ("layers", "recipes", "manual", "openings", "terraces", "other_costs")
 
 DEFAULT_WALL_HEIGHT_MM = 2700            # orientējošs, rediģējams
 DEFAULT_WASTE_PCT = 10.0                 # rezerve materiāliem; rediģējama, nošķirta no neto
@@ -103,23 +112,35 @@ def default_clt():
 
 
 def default_other_costs():
-    """Citas izmaksas (EUR): sākumā NAV ievadītas = nav iekļautas (nezināms nav nulle)."""
-    return [{"name": n, "amount_eur": None} for n in
-            ("MEP darbs un montāža", "Transports", "Montāža objektā", "Pieskaitāmās izmaksas", "Atlīdzība/peļņa")]
+    """Manuālas izmaksas (EUR) atsevišķi no materiāliem un darba operācijām: sākumā NAV ievadītas = nav iekļautas."""
+    return [{"id": "oc-mep", "name": "MEP darbs un montāža", "category": "Ārpakalpojumi", "group": None, "amount_eur": None, "source": ""},
+            {"id": "oc-transport", "name": "Transports", "category": "Transports", "group": None, "amount_eur": None, "source": ""},
+            {"id": "oc-install", "name": "Montāža objektā", "category": "Montāža", "group": None, "amount_eur": None, "source": ""}]
+
+
+def default_labour():
+    return {"rate_eur_h": None, "operations": []}
+
+
+def default_pricing():
+    """Pieskaitāmās izmaksas, uzcenojums VAI peļņas marža (atšķirīgas formulas) un PVN: nekas nav ievadīts, kamēr to nenorāda lietotājs."""
+    return {"overhead_pct": None, "method": None, "markup_pct": None, "margin_pct": None, "vat_enabled": False, "vat_pct": None}
 
 
 def empty_project(name="Jauns projekts", construction="clt"):
     return {
         "name": name, "construction": construction if construction in CONSTRUCTIONS else "clt",
         "floor_frame_enabled": True, "clt": default_clt(), "catalog": [], "recipes": [],
-        "other_costs": default_other_costs(), "review": {"reviewer": "", "confirmed": False},
+        "other_costs": default_other_costs(), "review": {"reviewer": "", "confirmed": False, "fp": None},
+        "labour": default_labour(), "pricing": default_pricing(), "is_demo": False,
+        "module_fp": {},
         "modules": [], "floor_net_m2": None, "ceiling_m2": None, "terraces": [],
         "wall_height_mm": DEFAULT_WALL_HEIGHT_MM, "ext_walls": [], "int_walls": [], "openings": [],
         "frames": {k: {"b_mm": None, "h_mm": None, "step_mm": None} for k in ("ext", "int", "roof")},
         "pir": {"enabled": True, "thickness_mm": DEFAULT_PIR_MM},
         "roof": {"mode": "area", "area_m2": None, "footprint_m2": None, "angle_deg": None, "slope_confirmed": False},
         "layers": default_layers(construction), "manual": [], "prices": {}, "waste_default_pct": DEFAULT_WASTE_PCT,
-        "excluded": ["Darbs, transports, montāža (ja nav ievadīti sadaļā «Citas izmaksas»)",
+        "excluded": ["Darbs, transports, montāža (ja nav ievadīti sadaļās «Darba operācijas» un «Citas izmaksas»)",
                      "Detalizētas inženiertīklu un stiprinājumu receptes (nākamie posmi)"],
     }
 
@@ -165,6 +186,44 @@ def module_fp(module) -> str:
     return f"{module.get('length_mm')}|{module.get('width_mm')}|{' '.join(str(module.get('axes') or '').split())}"
 
 
+def price_sig(unit, article, spec) -> str:
+    return f"{str(unit or '').strip()}|{str(article or '').strip()}|{str(spec or '').strip()}"
+
+
+def new_id():
+    return uuid.uuid4().hex[:8]
+
+
+def ensure_ids(project):
+    """Katrai lietotāja rindai (slāņi, receptes, manuālās, atveres, terases, citas izmaksas, darba operācijas) piešķir stabilu `id`."""
+    lists = [project.get(k) or [] for k in LINE_LISTS] + [(project.get("labour") or {}).get("operations") or []]
+    seen = set()
+    for lst in lists:
+        for line in lst:
+            if isinstance(line, dict):
+                cur = str(line.get("id") or "").strip()
+                if not cur or cur in seen:
+                    cur = new_id()
+                line["id"] = cur
+                seen.add(cur)
+    return project
+
+
+def project_fingerprint(project) -> str:
+    """Pirkstu nospiedums visiem projekta datiem, izņemot pārbaudes apstiprinājumu: jebkura datu izmaiņa to maina."""
+    data = {k: v for k, v in project.items() if k != "review"}
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")).hexdigest()[:20]
+
+
+def confirm_review(project, reviewer):
+    """Atzīmē pārbaudi KONKRĒTAM datu stāvoklim; vēlāka datu izmaiņa to atceļ (estimate salīdzina pirkstu nospiedumu)."""
+    project["review"] = {"reviewer": str(reviewer or "").strip(), "confirmed": True, "fp": project_fingerprint(project)}
+
+
+def set_price(project, row_id, price, unit, article=None, spec=""):
+    project.setdefault("prices", {})[row_id] = {"price": price, "sig": price_sig(unit, article, spec)}
+
+
 def norm_name(text):
     return " ".join(str(text or "").lower().split())
 
@@ -195,17 +254,42 @@ class Row:
     alt_unit: str = ""
     vol_net: object = None       # koksnes apjoms m³ (neto) kopsavilkumam
     vol_order: object = None
+    row_id: str = ""             # STABILA rindas identitāte (cenu atslēga); nav atkarīga no nosaukuma teksta
 
     @property
     def cost(self):
         return None if self.unit_price is None or self.order_qty is None else self.order_qty * self.unit_price
 
     def price_key(self):
-        return f"{self.group}|{self.material}"
+        return self.row_id
+
+    @property
+    def sig(self):
+        """Cenas piemērojamības paraksts: cena ir spēkā tikai rindai ar to pašu vienību, artikulu un specifikāciju."""
+        return price_sig(self.unit, self.article, self.spec)
 
     @property
     def approval(self):
         return "—" if self.approved is None else ("apstiprināts" if self.approved else "nav apstiprināts")
+
+
+@dataclass
+class LabourRow:
+    row_id: str
+    group: str
+    name: str
+    stage: str                   # ražošanas posms — brīvs lauks (klasifikāciju lietotājs definēs vēlāk)
+    module: str
+    qty: object                  # apjoms (vai None, ja norādītas tiešas stundas)
+    unit: str
+    norm_h: object               # normstundas uz vienību
+    hours: object                # stundas (vai None = nav ievadīts)
+    rate: object                 # pilna darba pašizmaksas likme EUR/h (vai None)
+    cost: object                 # EUR (vai None)
+    status: str
+    basis: str
+    source: str
+    approved: bool = False
 
 
 @dataclass
@@ -221,6 +305,10 @@ class Estimate:
     construction: str = "clt"
     other_costs: list = field(default_factory=list)     # [(nosaukums, EUR vai None)]
     review: dict = field(default_factory=dict)          # atbildīgās personas pārbaude
+    labour: list = field(default_factory=list)          # [LabourRow]
+    cost_items: list = field(default_factory=list)      # manuālās izmaksas {name, category, group, amount}
+    pricing: dict = field(default_factory=dict)         # pieskaitāmās, uzcenojums/marža, PVN (parsēti)
+    fingerprint: str = ""
 
     def group_status(self, group):
         if self.missing.get(group) or any(e.startswith(group) for e in self.errors):
@@ -244,26 +332,75 @@ class Estimate:
         return [g for g in MANDATORY_GROUPS if not any(r.group == g and r.status != ST_DUP for r in self.rows)]
 
     def budget(self):
-        """Budžeta kopsavilkums: tikai IEVADĪTĀS cenas un citas izmaksas; nepilnība tiek skaidri norādīta."""
+        """Budžets: materiāli (pasūtāmais × cena) + darbs (stundas × likme) + ārpakalpojumi + transports + montāža + cits
+        = TIEŠĀS izmaksas; + pieskaitāmās (% no tiešajām) = PAŠIZMAKSA; pārdošanas cena bez PVN pēc UZCENOJUMA (cena = pašizmaksa × (1 + u))
+        VAI PEĻŅAS MARŽAS (cena = pašizmaksa / (1 − m)) — divas atšķirīgas formulas; PVN pēc izvēles. Tikai ievadītie lielumi;
+        nezināms nav nulle, un nepilns budžets tiek marķēts `incomplete` ar iemesliem."""
         priced = [r for r in self.rows if r.cost is not None]
         unpriced = [r for r in self.rows if r.qty is not None and r.cost is None and r.status != ST_DUP]
         materials = sum(r.cost for r in priced)
+        labour_rows = [x for x in self.labour]
+        labour_cost = sum(x.cost for x in labour_rows if x.cost is not None)
+        labour_hours = sum(x.hours for x in labour_rows if x.hours is not None)
+        labour_missing = [x for x in labour_rows if x.cost is None]
         entered = [(n, a) for n, a in self.other_costs if a is not None]
         absent = [n for n, a in self.other_costs if a is None]
+        by_cat = {c: sum(i["amount"] for i in self.cost_items if i["category"] == c and i["amount"] is not None) for c in COST_CATEGORIES}
         other = sum(a for _n, a in entered)
+        direct = materials + labour_cost + other
+        pr = self.pricing or {}
+        overhead_pct = pr.get("overhead_pct")
+        overhead = None if overhead_pct is None else direct * overhead_pct / 100.0
+        cost_total = direct + (overhead or 0.0)
+        method, sell = pr.get("method"), None
+        if method == "markup" and pr.get("markup_pct") is not None:
+            sell = cost_total * (1 + pr["markup_pct"] / 100.0)
+        elif method == "margin" and pr.get("margin_pct") is not None and pr["margin_pct"] < 100:
+            sell = cost_total / (1 - pr["margin_pct"] / 100.0)
+        vat = total_incl = None
+        if sell is not None and pr.get("vat_enabled") and pr.get("vat_pct") is not None:
+            vat = sell * pr["vat_pct"] / 100.0
+            total_incl = sell + vat
+        reasons = []
+        if unpriced:
+            reasons.append(f"materiāli bez cenas: {len(unpriced)} rindas")
+        if labour_missing:
+            reasons.append(f"darba operācijas bez stundām/likmes: {len(labour_missing)}")
+        if not labour_rows:
+            reasons.append("darba operācijas nav ievadītas")
+        if absent:
+            reasons.append("neievadītas izmaksas: " + ", ".join(absent))
+        if overhead_pct is None:
+            reasons.append("pieskaitāmās izmaksas nav ievadītas")
+        if sell is None:
+            reasons.append("uzcenojums/peļņas marža nav ievadīta — pārdošanas cena nav aprēķināta")
+        if pr.get("vat_enabled") and pr.get("vat_pct") is None:
+            reasons.append("PVN likme nav ievadīta")
+        if self.uncovered:
+            reasons.append("obligātās grupas bez datiem: " + ", ".join(self.uncovered))
+        if self.missing or self.errors:
+            reasons.append("ir trūkstoši ievaddati vai kļūdas")
         hours = [r.hours for r in self.rows if r.hours is not None]
         return {"materials": materials, "priced_rows": len(priced), "unpriced_rows": len(unpriced), "other": other,
-                "other_entered": entered, "other_missing": absent, "total": materials + other,
-                "hours": sum(hours) if hours else None,
+                "other_entered": entered, "other_missing": absent, "total": direct, "direct": direct,
+                "labour_cost": labour_cost, "labour_hours": labour_hours, "labour_missing": len(labour_missing),
+                "labour_rows": len(labour_rows), "by_category": by_cat, "overhead": overhead, "overhead_pct": overhead_pct,
+                "cost_total": cost_total, "method": method, "sell": sell, "vat": vat, "total_incl": total_incl,
+                "profit": None if sell is None else sell - cost_total,
+                "hours": (labour_hours or None) if labour_rows else (sum(hours) if hours else None),
                 "unapproved_rows": sum(1 for r in self.rows if r.approved is False and r.qty is not None),
-                "incomplete": bool(unpriced or absent or self.uncovered or self.missing or self.errors)}
+                "reasons": reasons, "incomplete": bool(reasons)}
 
     @property
     def procurement_status(self):
-        """Gatavu iepirkumu sarakstu nosaka atbildīgās personas pārbaude UN obligāto grupu pārklājums (ChatGPT)."""
-        who = str((self.review or {}).get("reviewer") or "").strip()
-        if not ((self.review or {}).get("confirmed") and who):
+        """Gatavu iepirkumu sarakstu nosaka atbildīgās personas pārbaude UN obligāto grupu pārklājums (ChatGPT).
+        Pārbaude attiecas uz konkrētu datu stāvokli: jebkura vēlāka datu izmaiņa to atceļ."""
+        rv = self.review or {}
+        who = str(rv.get("reviewer") or "").strip()
+        if not (rv.get("confirmed") and who):
             return "NAV GATAVS IEPIRKUMAM — nav atbildīgās personas pārbaudes"
+        if rv.get("fp") != self.fingerprint:
+            return "NAV GATAVS IEPIRKUMAM — dati mainīti pēc pārbaudes (apstiprinājums atcelts)"
         if not self.complete or self.uncovered:
             return "NAV GATAVS IEPIRKUMAM — nepilns pārklājums (trūkst datu vai obligāto grupu)"
         return f"Atbildīgās personas ({who}) atzīmēts kā pārbaudīts; apjomi joprojām ir AD stadijas provizoriski"
@@ -274,7 +411,7 @@ class Estimate:
         out = []
         for group in GROUPS:
             rows = [r for r in self.rows if r.group == group and r.status != ST_DUP]
-            if not rows and not self.missing.get(group) and group not in MANDATORY_GROUPS:
+            if not rows and not self.missing.get(group) and group not in MANDATORY_GROUPS and not any(x.group == group for x in self.labour):
                 continue
             priced = [r for r in rows if r.cost is not None]
             timber = [r for r in rows if r.timber and r.qty is not None]
@@ -284,7 +421,8 @@ class Estimate:
                 "timber_net": sum(r.vol_net for r in timber), "timber_order": sum(r.vol_order for r in timber),
                 "cost": sum(r.cost for r in priced) if priced else None, "priced_rows": len(priced),
                 "unpriced_rows": sum(1 for r in rows if r.qty is not None and r.cost is None),
-                "hours": sum(r.hours for r in rows if r.hours is not None) if any(r.hours is not None for r in rows) else None})
+                "hours": (sum(x.hours for x in self.labour if x.group == group and x.hours is not None)
+                          if any(x.group == group and x.hours is not None for x in self.labour) else None)})
         return out
 
 
@@ -300,7 +438,24 @@ def estimate(project: dict) -> Estimate:
     def missing(group, text):
         est.missing.setdefault(group, []).append(text)
 
+    used_ids = set()
+
+    def uid(base):
+        out, n = base, 2
+        while out in used_ids:
+            out, n = f"{base}#{n}", n + 1
+        used_ids.add(out)
+        return out
+
+    def line_id(kind, line, label):
+        raw = str(line.get("id") or "").strip()
+        return f"{kind}:{raw}" if raw else f"{kind}~{norm_name(label)}"
+
+    def group_waste(group):
+        return 0.0 if group in ZERO_WASTE_GROUPS else waste_default
+
     def add(group, material, qty, unit, basis, source, status=ST_OK, waste=None, note="", pieces=False, timber=False, **extra):
+        rid = uid(extra.pop("rid", None) or f"{group}|{material}|{extra.get('article') or ''}|{unit}")
         order = None
         pack = extra.get("pack_size")
         if qty is not None:
@@ -310,7 +465,7 @@ def estimate(project: dict) -> Estimate:
                 order = math.ceil(round(order, 9))
             if pack:
                 order = math.ceil(round(order / pack, 9)) * pack          # iepakojuma noapaļošana (tikai ja iepakojums zināms)
-        row = Row(group, material, qty, unit, basis, source, status, waste, order, note=note, timber=timber, **extra)
+        row = Row(group, material, qty, unit, basis, source, status, waste, order, note=note, timber=timber, row_id=rid, **extra)
         if timber and qty is not None and row.vol_net is None and unit == "m³":
             row.vol_net, row.vol_order = qty, order
         est.rows.append(row)
@@ -352,7 +507,8 @@ def estimate(project: dict) -> Estimate:
         if floor_frame_on:
             add(G_FLOOR, f"Grīdas rāmja kokmateriāls — {name}", res.total_volume_m3, "m³",
                 f"Esošais rāmja kodols: L {res.length_mm} × W {res.width_mm} mm", res.reinforcement_source if res.reinforcements
-                else "Pamatrāmis (apstiprināti L/W)", ST_OK, waste_default, note=pcs, timber=True, module=name)
+                else "Pamatrāmis (apstiprināti L/W)", ST_OK, waste_default, note=pcs, timber=True, module=name,
+                rid=f"floor_frame:{norm_name(name)}")
         for w in res.warnings:
             est.warnings.append(f"{name}: {w.message}")
     areas["modules_confirmed"] = confirmed
@@ -367,7 +523,7 @@ def estimate(project: dict) -> Estimate:
         if t:
             add(G_FLOOR, f"PIR siltinājums {t:g} mm brīvajās zonās starp sijām", free_area, "m²",
                 f"Σ brīvās atstarpes × (W − 2 × perimetra platums); m³ = {free_area * t / 1000:.3f}", "Rāmja kodola atstarpes; biezums lietotāja",
-                ST_OK, waste_default)
+                ST_OK, waste_default, rid="pir")
         else:
             missing(G_FLOOR, "PIR biezums nav ievadīts")
 
@@ -381,7 +537,7 @@ def estimate(project: dict) -> Estimate:
 
     # ---------------- atveres ----------------
     open_area = {"Ārsiena": 0.0, "Iekšsiena": 0.0}
-    open_rows = []
+    open_rows, open_meta = [], []
     for i, o in enumerate(project.get("openings") or [], 1):
         label = str(o.get("name") or f"Atvere {i}").strip()
         try:
@@ -398,9 +554,10 @@ def estimate(project: dict) -> Estimate:
             continue
         open_area[wall] += w * h * cnt / 1e6
         open_rows.append((o.get("kind") or "Logs", label, int(w), int(h), int(cnt), wall))
-    for kind, label, w, h, cnt, wall in open_rows:
+        open_meta.append((line_id("opening", o, label), str(o.get("article") or "").strip() or None, str(o.get("spec") or "")))
+    for (kind, label, w, h, cnt, wall), (oid, oart, ospec) in zip(open_rows, open_meta):
         add(G_OPEN, f"{kind}: {label} {w}×{h} mm ({wall.lower()})", cnt, "gab.", f"{cnt} × {w}×{h} mm = {cnt * w * h / 1e6:.3f} m²",
-            "Lietotāja ievade", ST_OK, 0.0, pieces=True)
+            "Lietotāja ievade", ST_OK, 0.0, pieces=True, rid=oid, article=oart, spec=ospec or f"{kind} {w}×{h} mm")
     areas["openings_ext_m2"], areas["openings_int_m2"] = round(open_area["Ārsiena"], 6), round(open_area["Iekšsiena"], 6)
     ext_open_count = sum(c for _k, _l, _w, _h, c, wall in open_rows if wall == "Ārsiena")
     int_open_count = sum(c for _k, _l, _w, _h, c, wall in open_rows if wall == "Iekšsiena")
@@ -546,7 +703,7 @@ def estimate(project: dict) -> Estimate:
                 continue
             w = DEFAULT_WASTE_PCT if w is None else w            # CLT rezerve regulējama atsevišķi no pārējās
             unit = cfg.get("price_unit") if cfg.get("price_unit") in ("m²", "m³") else "m²"
-            common = dict(article=cfg.get("article"), spec=f"CLT panelis, biezums {t:g} mm" if t else "CLT panelis, biezums nav ievadīts",
+            common = dict(rid=f"clt:{key}", article=cfg.get("article"), spec=f"CLT panelis, biezums {t:g} mm" if t else "CLT panelis, biezums nav ievadīts",
                           approved=bool(cfg.get("thickness_confirmed")))
             src = cfg.get("source") or "Lietotāja ievadīts biezums (nav MLK specifikācija)"
             if area is None:
@@ -586,14 +743,15 @@ def estimate(project: dict) -> Estimate:
             est.warnings.append(f"«{name}» ({BASES[basis_key]}) jau ir ieskaitīts grupā «{seen[dup_key]}»: dublikāts netiek "
                                 "skaitīts (viens un tas pats slānis nedrīkst tikt ieskaitīts divreiz).")
             est.rows.append(Row(group, name, None, unit, BASES[basis_key], layer.get("source") or "", ST_DUP,
-                                note="Dublikāts"))
+                                note="Dublikāts", row_id=uid(line_id("layer", layer, name))))
             continue
         seen[dup_key] = group
         area = basis_value.get(basis_key)
         source = layer.get("source") or "Lietotāja slānis"
         approved = bool(layer.get("approved"))
         lstatus = ST_OK if approved else ST_UNAPPROVED
-        lx = dict(article=layer.get("article") or None, approved=approved)
+        lx = dict(article=str(layer.get("article") or "").strip() or None, approved=approved, rid=line_id("layer", layer, name),
+                  spec=str(layer.get("spec") or ""))
         if area is None:
             add(group, name, None, unit, BASES[basis_key], source, ST_MISSING, **lx)
             missing(group, f"«{name}»: nav ievadīts pamats «{BASES[basis_key]}»")
@@ -625,7 +783,8 @@ def estimate(project: dict) -> Estimate:
         if not area:
             missing(G_TERRACE, f"{label}: platība nav ievadīta")
             continue
-        add(G_TERRACE, f"Terase: {label}", area, "m²", "Lietotāja ievade; netiek ieskaitīta iekštelpu platībā", "Lietotāja ievade")
+        add(G_TERRACE, f"Terase: {label}", area, "m²", "Lietotāja ievade; netiek ieskaitīta iekštelpu platībā", "Lietotāja ievade",
+            rid=line_id("terrace", t, label), article=str(t.get("article") or "").strip() or None)
     for i, m in enumerate(project.get("manual") or [], 1):
         group = m.get("group") if m.get("group") in MANUAL_GROUPS else G_MANUAL
         material = str(m.get("material") or "").strip()
@@ -638,9 +797,14 @@ def estimate(project: dict) -> Estimate:
         if not material or qty is None:
             est.errors.append(f"{G_MANUAL}: rinda {i}: jānorāda materiāls un daudzums.")
             continue
+        if unit.lower() in LABOUR_UNITS:
+            est.errors.append(f"{group}: manuālā rinda «{material}» ir darba stundas — ievadi tās sadaļā «Darba operācijas», "
+                              "lai darbs netiktu ieskaitīts divreiz.")
+            continue
         pack = _safe(est, f"{G_MANUAL}: rinda {i}", lambda: num(m.get("pack_size")), None)
         add(group, material, qty, unit, "Lietotāja manuāli ievadīts apjoms", str(m.get("source") or "Manuāli")[:120], ST_MANUAL,
-            0.0 if waste is None else waste, pieces=(unit == "gab."), article=m.get("article") or None,
+            group_waste(group) if waste is None else waste, pieces=(unit == "gab."), rid=line_id("manual", m, material),
+            article=str(m.get("article") or "").strip() or None,
             spec=str(m.get("spec") or ""), module=str(m.get("module") or ""), stage=str(m.get("stage") or ""),
             pack_size=pack or None, approved=bool(m.get("approved")))
 
@@ -660,6 +824,10 @@ def estimate(project: dict) -> Estimate:
         unit = str(line.get("unit") or cat.get("unit") or "").strip()
         group = line.get("group") if line.get("group") in MANUAL_GROUPS else None
         driver = line.get("driver") if line.get("driver") in DRIVERS else "direct"
+        if unit.lower() in LABOUR_UNITS:
+            est.errors.append(f"{group or G_MANUAL}: receptes rinda «{name}» ir darba stundas — ievadi tās sadaļā «Darba operācijas», "
+                              "lai darbs netiktu ieskaitīts divreiz.")
+            continue
         if not name or not unit or group is None:
             est.errors.append(f"{G_MANUAL}: receptes rinda {i} ir nepilnīga (jānorāda grupa, nosaukums/artikuls un mērvienība).")
             continue
@@ -670,9 +838,9 @@ def estimate(project: dict) -> Estimate:
             continue
         if pack is None:
             pack = _safe(est, f"{group}: «{name}»", lambda: num(cat.get("pack_size")), None)
-        waste = waste_default if waste is None else waste
+        waste = group_waste(group) if waste is None else waste
         approved = bool(line.get("approved"))
-        extra = dict(article=art, spec=str(line.get("spec") or cat.get("spec") or ""), module=str(line.get("module") or ""),
+        extra = dict(rid=line_id("recipe", line, name), article=art, spec=str(line.get("spec") or cat.get("spec") or ""), module=str(line.get("module") or ""),
                      stage=str(line.get("stage") or ""), pack_size=pack or None, approved=approved)
         source = str(line.get("source") or "Lietotāja recepte")[:120]
         status = ST_OK if approved else ST_UNAPPROVED
@@ -694,11 +862,109 @@ def estimate(project: dict) -> Estimate:
     if len(est.rows) > MAX_ROWS:
         est.errors.append(f"Pārāk daudz tāmes rindu (maks. {MAX_ROWS}).")
 
-    # ---------------- cenas un darba stundas (neobligāti, manuāli) ----------------
-    for r in est.rows:
-        entry = prices.get(r.price_key()) or {}
+    # ---------------- darba operācijas (stundas × pilna darba pašizmaksas likme) ----------------
+    lab = project.get("labour") or {}
+    rate_default = _safe(est, "Darbs", lambda: num(lab.get("rate_eur_h")), None)
+    seen_ops = set()
+    for i, op in enumerate(lab.get("operations") or [], 1):
+        if op.get("enabled") is False:
+            continue
+        name = str(op.get("name") or "").strip()
+        group = op.get("group") if op.get("group") in GROUPS else None
+        if not name or group is None:
+            est.errors.append(f"{G_MANUAL}: darba operācijas rinda {i} ir nepilnīga (jānorāda grupa un nosaukums).")
+            continue
+        stage, module = str(op.get("stage") or "").strip(), str(op.get("module") or "").strip()
+        key = (norm_name(name), group, norm_name(module), norm_name(stage))
+        if key in seen_ops:
+            est.warnings.append(f"Darba operācija «{name}» ({group}) atkārtojas ar to pašu moduli un posmu: dublikāts netiek skaitīts "
+                                "(viens darbs nedrīkst tikt ieskaitīts divreiz).")
+            continue
+        seen_ops.add(key)
         try:
-            r.unit_price, r.hours = num(entry.get("price")), num(entry.get("hours"))
+            norm_h, qty_in, hours_direct, rate = (num(op.get(k)) for k in ("norm_h", "qty", "hours", "rate_eur_h"))
+        except ValueError as error:
+            est.errors.append(f"{group}: darbs «{name}»: {error}")
+            continue
+        driver = op.get("driver") if op.get("driver") in DRIVERS else "direct"
+        unit = str(op.get("unit") or "").strip()
+        approved = bool(op.get("approved"))
+        source = str(op.get("source") or "Lietotāja ievade")[:120]
+        qty = hours = None
+        if hours_direct is not None and norm_h is not None:
+            est.errors.append(f"{group}: darbs «{name}»: norādītas gan normstundas uz vienību, gan tiešas stundas — atstāj vienu "
+                              "(citādi darbs tiktu ieskaitīts divreiz).")
+            continue
+        if hours_direct is not None:
+            hours, basis = hours_direct, "Tiešs stundu daudzums"
+        else:
+            qty = qty_in if driver == "direct" else drivers.get(driver)
+            basis = f"{DRIVERS[driver]} × normstundas uz vienību"
+            if qty is not None and norm_h is not None:
+                hours = qty * norm_h
+                basis = f"{qty:g} {unit or ''} × {norm_h:g} h/vienība".replace("  ", " ")
+        rate_used = rate if rate is not None else rate_default
+        cost = None if hours is None or rate_used is None else hours * rate_used
+        if hours is None:
+            status = ST_MISSING
+            missing(group, f"Darbs «{name}»: " + ("nav ievadīta norma uz vienību" if norm_h is None else "nav apjoma/pamata"))
+        elif rate_used is None:
+            status = ST_NO_RATE
+            missing(group, f"Darbs «{name}»: nav ievadīta darba pašizmaksas likme (EUR/h)")
+        else:
+            status = ST_OK if approved else ST_UNAPPROVED
+        est.labour.append(LabourRow(uid(line_id("op", op, name)), group, name, stage, module, qty, unit, norm_h, hours, rate_used, cost,
+                                    status, basis, source, approved))
+
+    # ---------------- manuālās izmaksas (ārpakalpojumi, transports, montāža, cits) ----------------
+    for item in project.get("other_costs") or []:
+        label = str(item.get("name") or "").strip()
+        if not label:
+            continue
+        category = item.get("category") if item.get("category") in COST_CATEGORIES else "Cits"
+        group = item.get("group") or None
+        try:
+            amount = num(item.get("amount_eur"))
+        except ValueError as error:
+            est.errors.append(f"Citas izmaksas: {label}: {error}")
+            amount = None
+        if group is not None and group not in GROUPS:
+            est.errors.append(f"Citas izmaksas: {label}: nezināma grupa «{group}».")
+            group = None
+        est.other_costs.append((label, amount))
+        est.cost_items.append({"name": label, "category": category, "group": group, "amount": amount,
+                               "source": str(item.get("source") or "")})
+        # nepieļaut dubultošanu: ārpakalpojums grupā, kurā darbs jau ir ievadīts kā operācijas
+        if amount is not None and category == "Ārpakalpojumi" and group and any(x.group == group for x in est.labour):
+            est.errors.append(f"Dubultošana: grupā «{group}» darbs ir ievadīts gan kā darba operācijas, gan kā ārpakalpojums «{label}». "
+                              "Atstāj vienu.")
+
+    # ---------------- pieskaitāmās, uzcenojums/marža, PVN ----------------
+    pr = project.get("pricing") or {}
+    parsed = {"method": pr.get("method") if pr.get("method") in ("markup", "margin") else None,
+              "vat_enabled": bool(pr.get("vat_enabled"))}
+    for key, hi in (("overhead_pct", 100.0), ("markup_pct", 1000.0), ("margin_pct", 99.99), ("vat_pct", 100.0)):
+        try:
+            value = num(pr.get(key))
+        except ValueError as error:
+            est.errors.append(f"Cenojums: {key}: {error}")
+            value = None
+        if value is not None and value > hi:
+            est.errors.append(f"Cenojums: {key} nedrīkst pārsniegt {hi:g}.")
+            value = None
+        parsed[key] = value
+    est.pricing = parsed
+
+    # ---------------- cenas no stabilas rindas identitātes (+ katalogs) ----------------
+    for r in est.rows:
+        entry = prices.get(r.row_id) or {}
+        try:
+            price = num(entry.get("price"))
+            if price is not None and entry.get("sig") is not None and entry.get("sig") != r.sig:
+                est.warnings.append(f"Cena rindai «{r.material}» ievadīta citai specifikācijai/artikulam/vienībai ({entry.get('sig')}), "
+                                    f"bet rinda tagad ir ({r.sig}): cena netiek piemērota.")
+                price = None
+            r.unit_price = price
             cat = catalog.get(r.article) if r.article else None
             if r.unit_price is None and cat is not None and num(cat.get("unit_price")) is not None:
                 if str(cat.get("unit") or r.unit).strip() == r.unit:
@@ -708,15 +974,8 @@ def estimate(project: dict) -> Estimate:
                                         f"ir «{r.unit}»: cena netiek piemērota.")
         except ValueError as error:
             est.errors.append(f"Cenas: {r.material}: {error}")
-    for item in project.get("other_costs") or []:
-        label = str(item.get("name") or "").strip()
-        if not label:
-            continue
-        try:
-            est.other_costs.append((label, num(item.get("amount_eur"))))
-        except ValueError as error:
-            est.errors.append(f"Citas izmaksas: {label}: {error}")
-            est.other_costs.append((label, None))
+    est.fingerprint = project_fingerprint(project)
+    est.review = dict(project.get("review") or {})
 
     _controls(est, areas)
     return est
@@ -761,7 +1020,7 @@ def _controls(est, a):
 EXPORT_HEADER = ["Artikuls", "Materiāls", "Specifikācija", "Mervienība", "Neto", "Rezerve_%", "Pasūtāmais", "Iepakojums",
                  "Vienības_cena_EUR", "Izmaksas_EUR", "Modulis_telpa_sistēma", "Konstrukciju_grupa", "Ražošanas_posms",
                  "Avots_pieņēmums", "Apstiprinājums", "Statuss", "Aprēķina_pamats", "Alternatīvā_vienība_(nav_cenota)",
-                 "Darba_stundas", "Piezīme"]
+                 "Rindas_ID", "Piezīme"]
 NOT_FINAL = "PROVIZORISKA MATERIĀLU TĀME — NAV GALA PIEDĀVĀJUMS"
 
 
@@ -781,12 +1040,20 @@ def export_rows(project_name, est: Estimate):
     rows = [[_csv_safe(NOT_FINAL)], [_csv_safe(f"Projekts: {project_name}"), f"Statuss: {status}"],
             [_csv_safe(STAGE_NOTE)], [_csv_safe("Iepirkuma gatavība: " + est.procurement_status)],
             ["Konstrukcija:", CONSTRUCTIONS.get(est.construction, est.construction)], [],
-            ["BUDŽETA KOPSAVILKUMS (tikai ievadītās cenas; nepilns, ja norādīts)"],
+            ["BUDŽETA KOPSAVILKUMS (EUR bez PVN; tikai ievadītie lielumi; nepilns, ja norādīts)"],
             ["Materiāli (rindas ar cenu)", _fmt(b["materials"], 2), "EUR", f"rindas ar cenu: {b['priced_rows']}",
              f"BEZ CENAS: {b['unpriced_rows']} rindas"],
-            ["Citas izmaksas (ievadītās)", _fmt(b["other"], 2), "EUR"] + [f"{n}: {a:.2f}" for n, a in b["other_entered"]],
-            ["Citas izmaksas NAV ievadītas (neiekļautas)", "; ".join(b["other_missing"])],
-            ["KOPĀ (" + ("NEPILNS" if b["incomplete"] else "ievadītais") + ")", _fmt(b["total"], 2), "EUR"],
+            ["Darbs (stundas × likme)", _fmt(b["labour_cost"], 2), "EUR", f"stundas: {b['labour_hours']:.2f}", f"operācijas: {b['labour_rows']}"],
+            ["Manuālās izmaksas (ārpakalpojumi, transports, montāža, cits)", _fmt(b["other"], 2), "EUR"]
+            + [f"{n}: {a:.2f}" for n, a in b["other_entered"]],
+            ["Manuālās izmaksas NAV ievadītas (neiekļautas)", "; ".join(b["other_missing"])],
+            ["TIEŠĀS IZMAKSAS", _fmt(b["direct"], 2), "EUR"],
+            ["Pieskaitāmās izmaksas", _fmt(b["overhead"], 2) or "nav ievadīts", "EUR", f"% no tiešajām: {b['overhead_pct']}"],
+            ["PAŠIZMAKSA (" + ("NEPILNA" if b["incomplete"] else "ievadītais") + ")", _fmt(b["cost_total"], 2), "EUR"],
+            ["Cenojuma metode", {"markup": "uzcenojums: cena = pašizmaksa × (1 + u)", "margin": "peļņas marža: cena = pašizmaksa / (1 − m)"}.get(b["method"], "nav izvēlēta")],
+            ["PĀRDOŠANAS CENA bez PVN", _fmt(b["sell"], 2) or "nav aprēķināta", "EUR"],
+            ["PVN", _fmt(b["vat"], 2) or "nav aprēķināts", "EUR"], ["SUMMA AR PVN", _fmt(b["total_incl"], 2) or "nav aprēķināta", "EUR"],
+            ["Nepilnības iemesli", "; ".join(b["reasons"]) or "—"],
             ["Nav apstiprinātas rindas", b["unapproved_rows"]], [],
             ["GRUPU PĀRKLĀJUMS"]]
     for item in est.summary():
@@ -801,7 +1068,7 @@ def export_rows(project_name, est: Estimate):
                      "" if r.waste_pct is None else f"{r.waste_pct:g}", _fmt(r.order_qty),
                      "" if r.pack_size is None else f"{r.pack_size:g}", _fmt(r.unit_price, 2), _fmt(r.cost, 2), _csv_safe(r.module),
                      _csv_safe(r.group), _csv_safe(r.stage), _csv_safe(r.source), r.approval, r.status, _csv_safe(r.basis), alt,
-                     _fmt(r.hours, 1), _csv_safe(r.note)])
+                     _csv_safe(r.row_id), _csv_safe(r.note)])
     for group, items in est.missing.items():
         for item in items:
             rows.append(["", _csv_safe(item), "", "", "", "", "", "", "", "", "", _csv_safe(group), "", "", "", ST_MISSING, "", "", "",

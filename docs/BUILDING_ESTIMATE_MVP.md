@@ -71,30 +71,91 @@ elektroinstalācija, ūdens un kanalizācija, sanitārtehnika, iekārtas un kond
 **«NAV GATAVS IEPIRKUMAM»**, kamēr nav (1) atbildīgās personas vārda un apstiprinājuma (sadaļa 10) un (2) visu obligāto grupu pārklājuma bez trūkstošiem
 datiem; arī tad apjomi paliek **AD stadijas provizoriski** (atšķiras no PD/MEP un apstiprinātu recepšu stadijas).
 
-### Nākamajiem posmiem (NAV šajā PR)
-Detalizētas stiprinājumu un inženiertīklu recepšu automātika, iepakojumu optimizācija, MLK/Moneo artikulu sasaiste, ražošanas posmu klasifikācija un
-darba stundu/pašizmaksas aprēķins, CLT atgriezumu optimizācija, koka karkasa mājas pilna receptes pārbaude.
+### Nākamajiem posmiem
+Detalizētas stiprinājumu un inženiertīklu recepšu automātika, iepakojumu optimizācija, MLK/Moneo artikulu sasaiste, ražošanas posmu klasifikācija,
+CLT atgriezumu optimizācija, koka karkasa mājas pilna receptes pārbaude.
 
-### Telefonā: CLT demonstrācija
-1. Režīms **Pilnas ēkas tāme** → **Ielādēt demonstrācijas projektu** (sintētiska CLT māja; konstrukcijas tips = CLT).
-2. Augšā: budžets (96 EUR tikai no kataloga cenas skrūvēm — pārējais NEPILNS), «NAV GATAVS IEPIRKUMAM», grupu pārklājums (visas 12 grupas ar datiem),
-   koksne 32,563 m³, materiālu tabula (CLT paneļi ar m² un m³).
-3. Sadaļa **2b**: mainiet CLT biezumu vai «Cena pēc» (m² ↔ m³); **8**: mainiet normu vai izdzēsiet vērtību → «nav ievadīts»; **Cenas un darba stundas**: ievadiet
-   cenu (budžets pārrēķinās); **10**: ievadiet «Citas izmaksas», pārbaudītāja vārdu un atzīmi.
-4. **Lejupielādēt tāmi (CSV Excel)** — BOM ar visām kolonnām, budžetu, grupu pārklājumu un NAV IEKĻAUTAJIEM darbiem.
+## 3. posms (Issue #14): cenu imports, darba pašizmaksa, budžets līdz pārdošanas cenai, XLSX, projekta saglabāšana
+### Cenu/artikulu kataloga imports (sadaļa 9)
+Lokāla XLSX/CSV augšupielāde (fails tiek lasīts atmiņā, nekas netiek sūtīts). Kolonnas: **Artikuls, Nosaukums, Specifikācija, Mērvienība,
+Vienības cena EUR bez PVN, Iepakojums, Piegādātājs** (pēdējais pēc izvēles; atpazīst arī īsos nosaukumus). Lejupielādējams sintētisks šablons (XLSX/CSV).
+- **Artikuls = teksts** (CSV un teksta šūnās sākuma nulles saglabājas; skaitliska XLSX šūna tiek atzīmēta ar brīdinājumu).
+- **Trūkstoša cena = tukša, nevis 0**; cena 0 tiek atzīmēta ar brīdinājumu. Negatīva/nederīga cena, cena bez mērvienības, dublikāts artikuls, formulu šūnas
+  (netiek izpildītas) — rinda netiek importēta un parādās kļūdu sarakstā.
+- Priekšskatījums rāda derīgās rindas, kļūdas, jaunus/atjaunināmus/nemainītus artikulus, **nesaistītus artikulus** (neviena tāmes rinda tos nelieto) un
+  tāmes artikulus, kuru nav failā. **Mērvienības netiek konvertētas**: ja importa vienība neatbilst tāmes rindām ar šo artikulu, rinda netiek piemērota
+  (ne cena, ne vienība). Piemērošanai vajadzīgs apstiprinājums. Tukšs importētais lauks neizdzēš esošu cenu.
+
+### Stabila rindas identitāte (cenu atslēga)
+Katrai rindai ir stabils `id` (nevis `grupa|nosaukums`). Cena tiek piesaistīta rindas `id` un **parakstam (vienība | artikuls | specifikācija)**: ja tie mainās,
+cena netiek piemērota (brīdinājums). Tāpēc vienādi nosaukumi ar atšķirīgiem artikuliem/specifikācijām/vienībām nepārņem svešu cenu; rindas pievienošana vai
+kārtības maiņa cenas nepārbīda.
+
+### Darba operācijas un pašizmaksa (sadaļa 11)
+Tabula: grupa, **ražošanas posms (brīvs lauks)**, modulis (pēc izvēles), apjoma pamats (ģeometrija vai tiešs daudzums), **normstundas uz vienību VAI tiešas
+stundas** (abas kopā — kļūda, lai darbs netiktu ieskaitīts divreiz), likme EUR/h (kopējā pilnā darba pašizmaksas likme vai rindas likme). Trūkstoša norma, apjoms
+vai likme tiek marķēta, nulle netiek pieņemta. Atkārtota tā pati operācija (grupa + nosaukums + modulis + posms) netiek skaitīta divreiz; darba stundas
+materiālu/receptes rindās («h», «stundas») tiek bloķētas. Ārpakalpojums ar grupu, kurā jau ir darba operācijas, tiek bloķēts kā dubultošana.
+
+### Budžeta formulas (sadaļa 12) — vienāda secība visur
+`Materiāli (pasūtāmais × cena) + Darbs (stundas × likme) + Ārpakalpojumi + Transports + Montāža + Cits = TIEŠĀS`;
+`+ Pieskaitāmās (% no tiešajām) = PAŠIZMAKSA`;
+**Uzcenojums** `u`: `cena = pašizmaksa × (1 + u)` **VAI Peļņas marža** `m` (daļa no cenas): `cena = pašizmaksa / (1 − m)`, `m < 100%`. Tās ir DIVAS atšķirīgas formulas
+(20% uzcenojums ≠ 20% marža). `PVN = cena × likme` (pēc izvēles, likme jāievada). Zināmie un nezināmie lielumi: nezināms nav nulle; budžets tiek marķēts NEPILNS, ja
+trūkst cenu, darba datu, citu izmaksu, pieskaitāmo, cenojuma, obligāto grupu vai ir kļūdas. Rezerve: materiāliem rediģējami 10%; iekārtām, logiem/durvīm,
+sanitārtehnikai pēc noklusējuma 0%. CLT neto ģeometrija atšķiras no iepirkuma bruto/izgriezumiem — rezerve ir lietotāja regulējama, optimizācija nav realizēta.
+
+### Excel (XLSX) eksports
+Īsts .xlsx (openpyxl; atkarība `requirements.txt`). Lapas: **Kopsavilkums**, **Klienta piedāvājums** (bez pašizmaksām, stundām, likmēm, uzcenojuma/maržas, materiālu cenām),
+**Materiālu tāme**, **Iepirkumi** (artikuls, specifikācija, vienība, neto, rezerve, pasūtāmais, iepakojums, cena, modulis, posms, statuss; rindas netiek apvienotas,
+ir rindas ID), **Darba operācijas**, **Pieņēmumi un neiekļautais**. Skaitļi ir skaitļu šūnas; trūkstošs = «nav ievadīts». Visas teksta šūnas ir TEKSTS (arī, ja
+sākas ar `=`, `+`, `-`, `@`): formulas netiek izpildītas. Nepilnība un DEMO tiek skaidri norādīta; nepilns/provizorisks budžets netiek dēvēts par gala piedāvājumu.
+Joprojām pieejams arī BOM CSV.
+
+### Projekta saglabāšana (sadaļa 13)
+JSON lejupielāde/augšupielāde lokāli (bez servera, bez PDF, bez automātiskas sūtīšanas). Fails: `schema_version`, projekta dati (ievaddati, katalogs, receptes,
+darbaspēks, cenas) un kontrolsumma. Imports validē struktūru/tipus/izmērus, aizpilda trūkstošos laukus, ignorē nezināmus laukus (ar paziņojumu), piešķir trūkstošos rindu ID.
+**Gatavības statuss netiek uzticēts**: atbildīgās personas pārbaude vienmēr tiek atcelta; ja kontrolsumma neatbilst (fails mainīts ārpus programmas), tiek atceltas
+arī visas apstiprinājuma atzīmes. Demonstrācijas projekts saglabājas un atjaunojas ar identisku rezultātu.
+
+### Atbildīgās personas pārbaude (sadaļa 14)
+Apstiprinājums attiecas uz konkrētu datu stāvokli (pirkstu nospiedums): jebkura datu izmaiņa (cena, norma, katalogs, ģeometrija …) to atceļ.
+
+## Dati un piekļuve (svarīgi)
+**Reālus MLK datus (cenas, normas, projektus) izmantojiet TIKAI lokālajā versijā** (`start_mlk_windows.bat` / `streamlit run app.py`, adrese **127.0.0.1** savā datorā).
+**Lokālā versija nav pieejama no telefona** (127.0.0.1 ir tikai pašas ierīces adrese). **Telefonā** var atvērt tikai publiski izvietotu Streamlit lietotni (`docs/DEPLOY.md`) —
+tajā drīkst izmantot **tikai sintētiskus DEMO datus**; repozitorijs un publiskā lietotne nedrīkst saturēt MLK cenas, klientu failus vai reālus projektus.
+
+## Telefonā: demonstrācija līdz pārdošanas cenai (publiska DEMO lietotne)
+1. Režīms **Pilnas ēkas tāme** → **Ielādēt demonstrācijas projektu** (viens klikšķis; sintētiska CLT māja, pilnībā cenota).
+2. Augšā: budžeta tabula (materiāli, darbs, ārpakalpojumi, transports, montāža, pieskaitāmās, pašizmaksa, uzcenojums, pārdošanas cena, PVN, summa ar PVN), «Pašizmaksa» un
+   «Pārdošanas cena bez PVN», DEMO brīdinājums, «NAV GATAVS IEPIRKUMAM», grupu pārklājums, materiālu tabula.
+3. **Lejupielādēt Excel (XLSX)** — atveriet failu: lapas Kopsavilkums, Klienta piedāvājums, Materiālu tāme, Iepirkumi, Darba operācijas, Pieņēmumi.
+4. Mainiet kaut ko (CLT biezumu 2b, normu 8., darba likmi 11., uzcenojumu 12.) — rezultāts pārrēķinās. Izņemiet cenu katalogā (9.) — budžets kļūst NEPILNS.
+5. **Saglabāt projektu (JSON)** un 13. sadaļā **Atjaunot** — rezultāts identisks. 9. sadaļā var lejupielādēt cenu šablonu un augšupielādēt savu XLSX/CSV (DEMO datiem).
+
+## Lokāli ar reāliem datiem (rīt)
+1. Palaidiet lokāli (127.0.0.1). 2. 9. sadaļā augšupielādējiet MLK cenu XLSX/CSV pēc šablona (artikuls kā teksts, cena EUR bez PVN, trūkstošā cena — tukša). 3. Ievadiet
+darba likmi un operāciju normas (11.), citas izmaksas un cenojumu (12.). 4. Saglabājiet projektu JSON savā datorā; neievietojiet to GitHub.
 
 ## NAV realizēts (apzināti)
-Automātiska PDF → tāme; automātiska nesošo sienu/pastiprinājumu noteikšana; 45×240 īsās starpsijas; MLK receptes, cenas, normstundas; Excel formāts (ir CSV); stāvu/jumta ģeometrija (tikai ievadīti laukumi vai slīpuma formula); projekta saglabāšana/ielāde; atveru piesaiste konkrētam sienas posmam.
+Automātiska PDF → tāme; automātiska nesošo sienu/pastiprinājumu noteikšana; 45×240 īsās starpsijas; MLK receptes, cenas, normstundas (tikai lietotāja ievade/imports); stāvu/jumta ģeometrija (tikai ievadīti laukumi vai slīpuma formula); atveru piesaiste konkrētam sienas posmam; Moneo integrācija; ražošanas posmu klasifikācija; CLT paneļu optimizācija; detalizēta MEP/stiprinājumu automātika; 90% precizitātes pierādījums.
 
-## Kā pārbaudīt telefonā (lokāli vai uz jūsu Streamlit adreses)
-1. `streamlit run app.py` (vai `start_mlk_windows.bat`), atveriet adresi telefonā tajā pašā tīklā vai savā Streamlit lietotnē.
-2. Režīmu izvēlē izvēlieties **Pilnas ēkas tāme**.
-3. Spiediet **Ielādēt demonstrācijas projektu**. Augšā uzreiz parādās kopsavilkums pa grupām, koksne (32,563 m³ neto, CLT demonstrācija), materiālu tabula, kontroles, NAV IEKĻAUTIE darbi.
-4. Atveriet sadaļas zemāk (1.–8.), mainiet, piem., sienu augstumu, jumta leņķi, slāņa biezumu vai rezerves % — rezultāts pārrēķinās.
-5. Izdzēsiet jumta leņķi vai biezumu — redzēsiet «nav ievadīts» un NEPILNA TĀME.
-6. **Lejupielādēt tāmi (CSV Excel)**. Spiediet **Notīrīt projektu**, lai sāktu no nulles.
-
-## Demonstrācijas projekta kontrolvērtības
+## Demonstrācijas projekta kontrolvērtības (ģeometrija)
 Moduļi A 12000×4000 (asis 822,5 un 1150) un B 8000×4000, novietoti galu pie gala (šuve 8 m netiek skaitīta fasādē).
 Ārsienas 48 m × 2,7 m = 129,6 m²; atveres 6×(1,2×1,5)+1×(1,0×2,1) = 12,9 m²; neto 116,7 m². Iekšsienas 9,5 m × 2,7 = 25,65 m²; atveres 3×(0,8×2,1) = 5,04 m²; neto 20,61 m², abas puses 41,22 m².
 Jumts 120 m² / cos 20° = 127,70 m². Grīdas neto 72 m² (terase 12 m² atsevišķi). Testi: `python -m unittest tests.test_building_estimate`.
+
+## Demonstrācijas projekta sagaidāmās summas (DEMO, EUR; neatkarīgi rēķinātas testos)
+| Pozīcija | Summa |
+|---|---|
+| Materiāli (pasūtāmais × DEMO cena), 35 rindas | 47 955,46 |
+| Darbs: 413,30 h × 32,00 EUR/h (15 operācijas) | 13 225,49 |
+| Ārpakalpojumi 650 + transports 1 850 + montāža 5 400 | 7 900,00 |
+| **Tiešās izmaksas** | 69 080,95 |
+| Pieskaitāmās 8 % | 5 526,48 |
+| **Pašizmaksa** | 74 607,43 |
+| Uzcenojums 15 % → **pārdošanas cena bez PVN** | **85 798,54** |
+| PVN 21 % | 18 017,69 |
+| **Summa ar PVN** | **103 816,24** |
+Visi skaitļi ir sintētiski (nav MLK dati). Testi: `python -m unittest tests.test_budget_pricing tests.test_catalog_import tests.test_project_io tests.test_xlsx_export`.

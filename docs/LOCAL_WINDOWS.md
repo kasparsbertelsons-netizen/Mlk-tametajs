@@ -24,7 +24,7 @@ Ja ports 8501 ir aizņemts, rīks pats izvēlas nākamo brīvo (8502 …) un par
 - izvēlas portu (8501 vai nākamo brīvo) un palaiž `streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false` (+ `STREAMLIT_BROWSER_GATHER_USAGE_STATS=false`);
 - netiek mainīti publiskās lietotnes iestatījumi (`.streamlit/config.toml`).
 
-`127.0.0.1` nozīmē, ka lietotne **nav pieejama citiem tīkla datoriem**. Windows ugunsmūris parasti neprasa atļauju, jo nav ienākošo savienojumu no tīkla.
+`127.0.0.1` nozīmē, ka lietotne **nav pieejama citiem tīkla datoriem**. Tas attiecas arī uz **telefonu**: lokālā versija **no telefona nav atverama** (127.0.0.1 ir tikai pašas ierīces adrese). Reālus MLK datus izmantojiet tikai šeit; telefonā var apskatīt tikai publiski izvietotu DEMO versiju (`docs/DEPLOY.md`). Windows ugunsmūris parasti neprasa atļauju, jo nav ienākošo savienojumu no tīkla.
 
 ## Ko NEdara
 Neizmanto ārējus servisus, neveido publisku saiti, nepublicē PDF, nesūta statistiku. Konfidenciālus PDF **neievietojiet repozitorijā** (`.gitignore` ignorē `*.pdf`); lokālie pārskati pēc noklusējuma tiek glabāti `%LOCALAPPDATA%\MLK_diagnostika` (ārpus sinhronizētām mapēm).
