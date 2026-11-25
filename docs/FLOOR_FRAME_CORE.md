@@ -1,7 +1,7 @@
 # Grīdas pamatrāmja aprēķina kodols un AD apstiprināšanas plūsma (Issue #4)
 
 **Statuss:** provizorisks aprēķins, nevis konstruktora specifikācija. Ietver **tikai pamatrāmi**.
-**Dati:** testos tikai sintētiski dati; klientu rasējumi netiek glabāti.
+**Dati:** testos tikai sintētiski dati. Konfidenciālus rasējumus publiskā Streamlit lietotnē augšupielādēt nedrīkst, kamēr nav pārbaudīta piekļuve (skat. `docs/DEPLOY.md`); privāts GitHub repozitorijs nenozīmē privātu lietotni.
 
 ## Arhitektūra: ģeometrija atsevišķi no aprēķina
 | Modulis | Uzdevums | Atkarības |
@@ -37,19 +37,21 @@
 `calculate_module` izveido šķērssiju koordinātas (`(sākums, beigas)` mm no moduļa gala) un pārbauda tās ar `layout_problems`: katra sija atrodas starp gala sijām, atstarpes pirms katras sijas ir tieši 600 mm, pēdējā atstarpe ir atlikums, sijas nepārklājas. Iekšēja pretruna izraisa `RuntimeError`. Testi pārbauda novietojumu pār ~3900 L/W kombināciju (L no 1000 līdz 30000 ar soli 37; W = 3000, 3600, 4000, 4500, 5000).
 
 ## AD lietotnes plūsma
-1. PDF ir **nav obligāts**. Ja augšupielādēts, tiek nolasīts ar `read_pdf` (30 MB, 100 lapas, bez paroles).
-2. Tiek parādīti **kandidāti** no grīdas plāna lapām ar avota lapu. Tie nav ranžēti, nav apstiprināti un netiek ielikti ievades laukos.
-3. Netiek izmantoti: **jumta plāna** lapas, **titullapa/rasējumu saraksts** (lapa, kurā "Floor plan" minēts kopā ar jumta plānu vai saraksta atzīmi), skaitļi rindās ar **terase/terrace/veranda**. Izslēgtie avoti tiek parādīti sarakstā.
-4. Lietotājs ievada **L un W** katram taisnstūra modulim (1–10 moduļi), izvēlas avotu un atzīmē apstiprinājumu. Bez apstiprinājuma aprēķins netiek veikts.
-5. `W > 4500` mm: brīdinājums un atsevišķs apstiprinājums; robeža nav absolūta, un 3600 mm tiek pieņemts.
-6. Perimetra platums ≠ 200: nepieciešams atsevišķs apstiprinājums.
-7. Rezultāts katram modulim: siju garumi, skaits, m³, atlikums, brīdinājumi, šķērssiju novietojums; tad kopsumma un CSV (`MLK_AD_pamatramis.csv`).
-8. L/U formas moduļi netiek sadalīti automātiski: ievada atsevišķus taisnstūrus.
+1. PDF **nav obligāts**. Ja augšupielādēts, tiek nolasīts ar `read_pdf` (30 MB, 100 lapas, bez paroles). Nolasītais teksts glabājas **tikai šīs sesijas `st.session_state`** un tiek dzēsts, mainot vai noņemot PDF; globāls kešs (`st.cache_data`) netiek lietots.
+2. Tiek parādīts **pagaidu kandidātu saraksts** (heiristika, nevis automātiska ģeometrija) no grīdas plāna lapām ar avota lapu. Kandidāti nav ranžēti un netiek ielikti ievades laukos.
+3. Netiek izmantoti: **jumta plāna** lapas, **titullapa/rasējumu saraksts** (lapa, kurā "Floor plan" minēts kopā ar jumta plānu vai saraksta atzīmi), skaitļi rindās ar **terase/terrace/veranda**. Terases tiek izslēgtas tikai pēc atslēgvārda tajā pašā rindā, tāpēc **nav garantijas, ka visas terases ir izslēgtas**; lietotājam jāpārbauda, vai L un W neietver terasi.
+4. Lietotājs ievada **L un W** katram taisnstūra modulim (1–10 moduļi), izvēlas avotu un spiež **"Apstiprināt šo ievadi"**.
+5. **Apstiprinājums ir piesaistīts ievades versijai**: L, W, perimetrs, avots, PDF identitāte (SHA-256) un nestandarta/platuma atzīmes. Mainoties jebkuram no tiem, apstiprinājums tiek atcelts ("Ievade mainīta pēc apstiprinājuma") un jāapstiprina vēlreiz. Nestandarta perimetra un platuma atzīmes ir saistītas ar konkrēto vērtību, tāpēc mainot perimetru vai platumu tās atkal ir neatzīmētas. Noņemta moduļa apstiprinājums netiek atjaunots, pievienojot moduli atpakaļ.
+6. `W > 4500` mm: brīdinājums un atsevišķs apstiprinājums; robeža nav absolūta, un 3600 mm tiek pieņemts. Perimetra platums ≠ 200 mm: nepieciešams atsevišķs apstiprinājums.
+7. Rezultāts katram modulim: siju garumi, skaits, m³, atlikums, brīdinājumi, šķērssiju novietojums.
+8. **Nepilns aprēķins:** ja derīgu un apstiprinātu moduļu ir mazāk nekā pieprasīts, tiek rādīts **"NEPILNS APRĒĶINS (X no Y moduļiem)"**; atsevišķu moduļu rezultāti paliek redzami, bet projekta kopsumma un CSV eksports netiek rādīti līdz visi moduļi ir derīgi un apstiprināti.
+9. Pilnam aprēķinam: kopsumma un CSV (`MLK_AD_pamatramis.csv`).
+10. L/U formas moduļi netiek sadalīti automātiski: ievada atsevišķus taisnstūrus.
 
 ## Ierobežojumi
 - Sintētiskie PDF satur tikai tekstu, tāpēc tie **nepierāda vektoru ģeometrijas atpazīšanu**; pilna atpazīšana nav šī posma uzdevums.
 - Pastiprinājumi 150×240 un 45×240 īsās starpsijas netiek noteiktas un netiek ieskaitītas; kopējais apjoms var būt par mazu.
-- Terases tiek izslēgtas tikai tad, ja atslēgvārds ir **tajā pašā teksta rindā** ar skaitli. Ja PDF teksta izvilkšana tos sadala atsevišķās rindās, skaitlis paliek kandidātu sarakstā, bet tas nekad netiek izvēlēts automātiski.
+- Terases tiek izslēgtas tikai tad, ja atslēgvārds ir **tajā pašā teksta rindā** ar skaitli (tests `test_terrace_label_on_a_separate_line_is_not_excluded` to fiksē). Citādi skaitlis paliek kandidātu sarakstā, bet nekad netiek izvēlēts automātiski.
 - Netiek atpazīti izmēri ar tūkstošu atdalītāju ("12 000") un ārpus 2000–20000 mm; lietotājs tos ievada pats.
 - Zāģēšanas atgriezumi, savienojumi un stiprinājumi netiek ieskaitīti.
 
@@ -63,3 +65,6 @@
 | 5 | AD ceļā nebija 100 lapu un paroles pārbaudes | novērsts: AD izmanto `read_pdf` |
 
 Visi `@expectedFailure` testi ir aizstāti ar parastiem testiem pēc faktiskas problēmas novēršanas; neviens tests netiek izlaists.
+
+## Testēšanas vide
+Python 3.13, Streamlit 1.67.0, PyMuPDF 1.28.2; `requirements.txt` zemākās versijas ir šīs. `TestEnvironment` pārbauda, ka uzstādītās versijas atbilst `requirements.txt`, un ka AppTest atbalsta failu augšupielādi; citādi testi krīt, nevis tiek izlaisti.

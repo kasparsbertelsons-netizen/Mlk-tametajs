@@ -1,10 +1,16 @@
 """Streamlit saskarne AD režīmam (Issue #4).
 
-Plūsma: PDF (nav obligāts) → kandidāti ar avota lapu → lietotājs ievada un
-apstiprina katra moduļa L un W → pamatrāmja aprēķins (`src/floor_frame.py`).
-Aprēķins netiek veikts, kamēr izmēri nav apstiprināti.
+Plūsma: PDF (nav obligāts) → pagaidu kandidāti ar avota lapu → lietotājs ievada
+katra moduļa L un W un spiež "Apstiprināt" → pamatrāmja aprēķins
+(`src/floor_frame.py`).
+
+Apstiprinājums ir piesaistīts konkrētai ievades versijai (L, W, perimetrs,
+avots, PDF identitāte, nestandarta/platuma apstiprinājumi). Mainoties jebkuram no
+tiem, apstiprinājums vairs neder. PDF teksts netiek glabāts globālā kešā: tikai
+šīs sesijas `st.session_state`, un tas tiek dzēsts, mainot vai noņemot PDF.
 """
 import csv
+import hashlib
 import io
 
 import streamlit as st
@@ -19,22 +25,42 @@ from src.pdf_reader import read_pdf
 MAX_PDF_BYTES = 30 * 1024 * 1024
 MAX_MODULES = 10
 MANUAL_SOURCE = "Ievadīts manuāli"
+SCAN_KEY = "ad_scan"                   # sesijas ietvaros; dzēšams
+CONFIRMATIONS_KEY = "ad_confirmations"  # {moduļa indekss: ievades pirkstu nospiedums}
 
 
-@st.cache_data(show_spinner=False, max_entries=4)
-def _scan_pdf(data: bytes) -> dict:
-    pdf = read_pdf(data)
+def _load_scan(upload):
+    """(scan, pdf_id, kļūda). Rezultāts glabājas tikai sesijā un tiek dzēsts, mainot/noņemot PDF."""
+    state = st.session_state
+    if upload is None:
+        state.pop(SCAN_KEY, None)
+        return None, None, None
+    cached = state.get(SCAN_KEY)
+    if cached and cached["file_id"] == upload.file_id:
+        return cached["scan"], cached["pdf_id"], None
+    state.pop(SCAN_KEY, None)
+    if upload.size > MAX_PDF_BYTES:
+        return None, f"{upload.name}:{upload.size}", "Maksimālais PDF izmērs ir 30 MB."
+    data = upload.getvalue()
+    pdf_id = hashlib.sha256(data).hexdigest()[:16]
+    try:
+        pdf = read_pdf(data)
+    except (ValueError, RuntimeError) as error:
+        return None, pdf_id, f"PDF neizdevās nolasīt: {error}"
+    except Exception as error:  # bojāts PDF u. c.
+        return None, pdf_id, f"PDF analīzes kļūda: {error}"
     scan = scan_plan_pages([page["text"] for page in pdf["pages"]])
     scan["page_count"] = len(pdf["pages"])
-    return scan
+    state[SCAN_KEY] = {"file_id": upload.file_id, "pdf_id": pdf_id, "scan": scan}
+    return scan, pdf_id, None
 
 
 def _render_candidates(scan: dict):
     floor_pages, skipped = scan["floor_pages"], scan["skipped_pages"]
     st.caption(
-        f"Nolasītas {scan['page_count']} lapas. PDF teksts nepierāda moduļa ģeometriju: "
-        "tālāk redzamie skaitļi ir tikai kandidāti, tie nav apstiprināti un nav ranžēti. "
-        "L un W jāievada un jāapstiprina pašam.")
+        f"Nolasītas {scan['page_count']} lapas. Tas ir **pagaidu kandidātu saraksts** no PDF teksta "
+        "(heiristika), nevis automātiski noteikta ģeometrija. Teksta PDF nepierāda moduļa "
+        "izmērus: kandidāti nav apstiprināti un nav ranžēti. L un W jāievada un jāapstiprina pašam.")
     rows = [{"Lapa": page["page"], "Izmērs (mm)": c["value_mm"], "Atkārtojumi": c["count"],
              "Fragments": c["context"]}
             for page in floor_pages for c in page["candidates"]]
@@ -44,20 +70,24 @@ def _render_candidates(scan: dict):
     elif not rows:
         st.warning("Grīdas plāna lapās nav atrasts neviens izmēra kandidāts. Ievadi L un W manuāli.")
     else:
-        st.subheader("Izmēru kandidāti no grīdas plāna")
+        st.subheader("Izmēru kandidāti no grīdas plāna (pagaidu)")
         st.dataframe(rows, hide_index=True, use_container_width=True)
     excluded = [{"Lapa": page["page"], "Iemesls": page["reason"], "Skaitļi": ""} for page in skipped]
     for page in floor_pages:
         if page["excluded_numbers"]:
             values = ", ".join(str(item["value_mm"]) for item in page["excluded_numbers"])
-            excluded.append({"Lapa": page["page"], "Iemesls": "Terase: skaitļi izslēgti",
+            excluded.append({"Lapa": page["page"],
+                             "Iemesls": "Rinda ar atslēgvārdu 'terase': skaitļi izslēgti",
                              "Skaitļi": values})
     if excluded:
-        with st.expander("Izslēgtie avoti (jumts, titullapa/saraksts, terases)"):
+        with st.expander("Izslēgtie avoti (jumta plāns, titullapa/saraksts, rindas ar 'terase')"):
             st.dataframe(excluded, hide_index=True, use_container_width=True)
+    st.caption("Terases tiek izslēgtas tikai pēc atslēgvārda tajā pašā teksta rindā: tas negarantē, "
+               "ka visas terases ir izslēgtas. Pārbaudi, vai L un W neietver terasi.")
 
 
-def _module_inputs(index: int, sources: list) -> dict:
+def _module_inputs(index: int, sources: list, pdf_id) -> dict:
+    confirmations = st.session_state.setdefault(CONFIRMATIONS_KEY, {})
     with st.container(border=True):
         st.markdown(f"**Modulis {index + 1}**")
         name = st.text_input("Nosaukums", value=f"Modulis {index + 1}", max_chars=60,
@@ -71,22 +101,42 @@ def _module_inputs(index: int, sources: list) -> dict:
             f"Perimetra sijas platums (mm); noklusējums {PERIMETER_WIDTH_MM}, nav nolasīts no rasējuma",
             min_value=1, max_value=1000, value=PERIMETER_WIDTH_MM, step=10, key=f"ad_perim_{index}")
         source = st.selectbox("Izmēru avots", sources, key=f"ad_src_{index}")
+        # Atslēga satur vērtību: mainoties perimetram/platumam, apstiprinājums sākas no jauna (neatzīmēts).
         nonstandard = False
         if perimeter != PERIMETER_WIDTH_MM:
             nonstandard = st.checkbox(
                 f"Apstiprinu nestandarta perimetra platumu {perimeter} mm "
-                "(tikai, ja tas ir nepārprotami norādīts rasējumā)", key=f"ad_nonstd_{index}")
+                "(tikai, ja tas ir nepārprotami norādīts rasējumā)",
+                key=f"ad_nonstd_{index}_{perimeter}")
         wide = True
         if width > WIDTH_REVIEW_LIMIT_MM:
             wide = st.checkbox(
                 f"Platums {width} mm pārsniedz orientējošo {WIDTH_REVIEW_LIMIT_MM} mm; "
-                "apstiprinu, ka tas ir pareizs", key=f"ad_wide_{index}")
-        confirmed = st.checkbox(
-            "Apstiprinu, ka L un W ir šī taisnstūra moduļa ārējie grīdas rāmja izmēri",
-            key=f"ad_confirm_{index}")
-    return {"name": name.strip() or f"Modulis {index + 1}", "length": length, "width": width,
-            "perimeter": perimeter, "source": source, "nonstandard": nonstandard,
-            "wide": wide, "confirmed": confirmed}
+                "apstiprinu, ka tas ir pareizs", key=f"ad_wide_{index}_{width}")
+        fingerprint = (int(length), int(width), int(perimeter), source, pdf_id, nonstandard, wide)
+
+        if st.button("Apstiprināt šo ievadi (L, W, perimetrs, avots)", key=f"ad_confirm_{index}"):
+            if length == 0 or width == 0:
+                st.warning("Ievadi L un W, pirms apstiprini.")
+            elif perimeter != PERIMETER_WIDTH_MM and not nonstandard:
+                st.error("Vispirms atzīmē nestandarta perimetra apstiprinājumu.")
+            elif width > WIDTH_REVIEW_LIMIT_MM and not wide:
+                st.error(f"Vispirms atzīmē platuma virs {WIDTH_REVIEW_LIMIT_MM} mm apstiprinājumu.")
+            else:
+                confirmations[index] = fingerprint
+        stored = confirmations.get(index)
+        confirmed = stored is not None and stored == fingerprint
+        if confirmed:
+            st.success(f"Apstiprināts: L = {length} mm, W = {width} mm, perimetrs = {perimeter} mm, "
+                       f"avots: {source}.")
+        elif stored is not None:
+            st.warning("Ievade mainīta pēc apstiprinājuma (L, W, perimetrs, avots vai PDF): "
+                       "apstiprinājums atcelts. Apstiprini vēlreiz.")
+        else:
+            st.info("Gaida apstiprinājumu: aprēķins netiek veikts.")
+    return {"name": name.strip() or f"Modulis {index + 1}", "length": int(length),
+            "width": int(width), "perimeter": int(perimeter), "source": source,
+            "nonstandard": nonstandard, "confirmed": confirmed}
 
 
 def _render_module_result(result):
@@ -108,20 +158,14 @@ def _render_module_result(result):
 
 def render_ad_mode():
     st.info("Aprēķins notiek tikai no lietotāja apstiprinātiem moduļu izmēriem. " + SCOPE_NOTE)
-    upload = st.file_uploader("Augšupielādē arhitektūras daļas PDF (AD) — nav obligāti",
-                              type=["pdf"], key="ad_pdf",
-                              help="PDF tiek analizēts šajā sesijā; programma to neievieto GitHub.")
-    scan = None
-    if upload is not None:
-        if upload.size > MAX_PDF_BYTES:
-            st.error("Maksimālais PDF izmērs ir 30 MB.")
-        else:
-            try:
-                scan = _scan_pdf(upload.getvalue())
-            except (ValueError, RuntimeError) as error:
-                st.error(f"PDF neizdevās nolasīt: {error}")
-            except Exception as error:  # bojāts PDF u. c.
-                st.error(f"PDF analīzes kļūda: {error}")
+    upload = st.file_uploader(
+        "Augšupielādē arhitektūras daļas PDF (AD) — nav obligāti", type=["pdf"], key="ad_pdf",
+        help="PDF teksts tiek apstrādāts tikai šajā sesijā un netiek ielikts GitHub. Publiski "
+             "pieejamā Streamlit lietotnē nav individuālas autentifikācijas: konfidenciālus "
+             "rasējumus augšupielādē tikai pēc piekļuves pārbaudes (skat. docs/DEPLOY.md).")
+    scan, pdf_id, load_error = _load_scan(upload)
+    if load_error:
+        st.error(load_error)
     if scan:
         _render_candidates(scan)
     sources = [MANUAL_SOURCE] + [f"PDF {page['page']}. lapa"
@@ -130,20 +174,17 @@ def render_ad_mode():
     st.subheader("Apstiprināmie moduļi")
     st.caption("Katrs fiziskais modulis ir savs taisnstūris. L/U formas moduļus automātiski "
                "nesadala: ievadi atsevišķus taisnstūrus. Terases neieskaita.")
-    count = st.number_input("Moduļu skaits", min_value=1, max_value=MAX_MODULES, value=1,
-                            step=1, key="ad_module_count")
+    requested = int(st.number_input("Moduļu skaits", min_value=1, max_value=MAX_MODULES, value=1,
+                                    step=1, key="ad_module_count"))
+    # Noņemta moduļa apstiprinājums nedrīkst atgriezties, pievienojot moduli atpakaļ.
+    confirmations = st.session_state.setdefault(CONFIRMATIONS_KEY, {})
+    for stale in [i for i in confirmations if i >= requested]:
+        del confirmations[stale]
+
     results = []
-    for index in range(int(count)):
-        data = _module_inputs(index, sources)
+    for index in range(requested):
+        data = _module_inputs(index, sources, pdf_id)
         if not data["confirmed"]:
-            st.info(f"{data['name']}: gaida apstiprinājumu; aprēķins netiek veikts.")
-            continue
-        if data["length"] == 0 or data["width"] == 0:
-            st.warning(f"{data['name']}: ievadi L un W.")
-            continue
-        if not data["wide"]:
-            st.warning(f"{data['name']}: platums {data['width']} mm virs {WIDTH_REVIEW_LIMIT_MM} mm "
-                       "nav apstiprināts; aprēķins netiek veikts.")
             continue
         try:
             results.append(calculate_module(
@@ -153,10 +194,14 @@ def render_ad_mode():
         except ValueError as error:
             st.error(f"{data['name']}: {error}")
 
-    if not results:
-        return
     for result in results:
         _render_module_result(result)
+
+    if len(results) != requested:
+        st.warning(f"**NEPILNS APRĒĶINS ({len(results)} no {requested} moduļiem).** Projekta "
+                   "kopsumma un CSV eksports netiek rādīti, kamēr visi moduļi nav derīgi un "
+                   "apstiprināti.")
+        return
 
     total = summarize_modules(results)
     st.subheader("Kopsavilkums (tikai pamatrāmis)")

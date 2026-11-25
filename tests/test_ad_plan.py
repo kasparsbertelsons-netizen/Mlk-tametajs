@@ -62,6 +62,14 @@ class TestCandidates(unittest.TestCase):
         self.assertEqual(sorted(item["value_mm"] for item in excluded), [3000, 5000, 6000])
         self.assertTrue(all(item["reason"] == "Terase" for item in excluded))
 
+    def test_terrace_label_on_a_separate_line_is_not_excluded(self):
+        # Zināms ierobežojums: izslēgšana notiek tikai pēc atslēgvārda TAJĀ PAŠĀ rindā.
+        # Tāpēc nav garantijas, ka visas terases ir izslēgtas; skaitlis paliek kandidāts
+        # (netiek izvēlēts automātiski) un lietotājam jāpārbauda.
+        found, excluded = extract_dimension_candidates("Terase\n6000")
+        self.assertEqual(values(found), [6000])
+        self.assertEqual(excluded, [])
+
     def test_thousands_separator_is_not_read(self):
         # "12 000" netiek atpazīts; lietotājs ievada izmēru pats.
         self.assertEqual(extract_dimension_candidates("12 000\n4 000")[0], [])
