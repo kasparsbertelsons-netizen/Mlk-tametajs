@@ -13,7 +13,7 @@ import pymupdf
 
 from src.ad_plan import scan_plan_pages
 from src.ad_vector import (
-    PROVEN, RECOGNISED, REFUSED, UNCLEAR, analyze_pdf, render_preview_png,
+    CONSISTENT, RECOGNISED, REFUSED, UNCLEAR, analyze_pdf, render_preview_png,
 )
 from src.pdf_reader import read_pdf
 from tools import synthetic_ad_pdf as gen
@@ -63,7 +63,7 @@ class TestSample01(unittest.TestCase):
 
     def test_module_candidate_with_vector_evidence(self):
         c = only(self.result[2])
-        self.assertEqual((c["status"], c["shape"], c["length_mm"], c["width_mm"]), (PROVEN, "rectangle", 12000, 4000))
+        self.assertEqual((c["status"], c["shape"], c["length_mm"], c["width_mm"]), (CONSISTENT, "rectangle", 12000, 4000))
         self.assertTrue(c["transferable"])
         x0, y0 = 150, 260
         expected = [x0, y0, x0 + 12000 / 50 * PT, y0 + 4000 / 50 * PT]          # 830,31 un 486,77 pt
@@ -123,7 +123,7 @@ class TestSample01(unittest.TestCase):
 class TestSample02(unittest.TestCase):
     def test_12100x3600_at_1_to_100(self):
         c = only(analyze(gen.build_sample_02())[1])
-        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (PROVEN, 12100, 3600))
+        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (CONSISTENT, 12100, 3600))
         self.assertEqual(c["scale"]["denominator"], 100)
         for d in c["dimensions"]:
             self.assertAlmostEqual(d["implied_denominator"], 100.0, delta=0.2)
@@ -135,12 +135,12 @@ class TestTwoModules(unittest.TestCase):
         page = analyze(gen.build_sample_03())[1]
         a, b = page["candidates"]
         self.assertEqual([(a["status"], a["length_mm"], a["width_mm"]), (b["status"], b["length_mm"], b["width_mm"])],
-                         [(PROVEN, 12000, 4000), (PROVEN, 12000, 3600)])
+                         [(CONSISTENT, 12000, 4000), (CONSISTENT, 12000, 3600)])
         self.assertEqual((a["boundary"]["adjacent_to"], b["boundary"]["adjacent_to"]), ([b["id"]], [a["id"]]))
         for c in (a, b):
             self.assertIsNotNone(c["boundary"]["separator"])
             self.assertTrue(c["boundary"]["separator"]["dashed"])
-            self.assertTrue(any("robeža" in line and "pierādīta" in line for line in c["evidence"]))
+            self.assertTrue(any("robeža" in line and "marķēta zīmējumā" in line for line in c["evidence"]))
         self.assertEqual(b["shape"], "rectangle")            # B zīmēts kā slēgta polilīnija (qu)
         self.assertNotIn(7600, {c["width_mm"] for c in page["candidates"]})   # nav apvienots
 
@@ -151,7 +151,7 @@ class TestTwoModules(unittest.TestCase):
             for c in page["candidates"]:
                 self.assertEqual(c["status"], UNCLEAR, kwargs)
                 self.assertIsNone(c["boundary"]["separator"])
-                self.assertTrue(any("robeža nav pierādīta" in i for i in c["issues"]))
+                self.assertTrue(any("robeža zīmējumā nav marķēta" in i for i in c["issues"]))
                 self.assertIn(c["length_mm"], (12000,))
 
 
@@ -240,10 +240,11 @@ class TestAmbiguousAndRefused(unittest.TestCase):
             sheet.number_v(x0 - 47.5, (y0 + y1) / 2 + 10, "4000")
             sheet.text(x0 + 300, y0 + 40, "MODULIS M1", size=12)
         c = only(analyze(custom_pdf(draw))[1])
-        self.assertEqual(c["status"], UNCLEAR)                              # bez izvilkuma līnijām nav "pierādīts"
+        self.assertEqual(c["status"], UNCLEAR)                              # bez izvilkuma līnijām nav "ģeometriski saskaņots"
         self.assertEqual((c["length_mm"], c["width_mm"]), (12000, 4000))
         self.assertTrue(all(not d["extension_lines_both_ends"] for d in c["dimensions"]))
-        self.assertTrue(any("izvilkuma līniju" in i for i in c["issues"]))
+        self.assertTrue(any("izvilkuma līnijas nav pierādītas pie šīs kontūras" in i for i in c["issues"]))
+        self.assertTrue(all(not d["linked_to_contour"] for d in c["dimensions"]))
 
     def test_non_numeric_text_near_dimension_lines_is_not_a_dimension(self):
         def draw(sheet):
@@ -255,7 +256,7 @@ class TestAmbiguousAndRefused(unittest.TestCase):
         page = analyze(custom_pdf(draw))[1]
         self.assertEqual(page["status"], "ok")
         c = only(page)
-        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (PROVEN, 12000, 4000))
+        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (CONSISTENT, 12000, 4000))
         self.assertEqual({d["value_mm"] for d in page["dimensions"]}, {12000, 4000})
 
     def test_unlabelled_contour_is_recognised_but_not_proven(self):
@@ -263,6 +264,104 @@ class TestAmbiguousAndRefused(unittest.TestCase):
         self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (RECOGNISED, 12000, 4000))
         self.assertIsNone(c["boundary"]["label"])
         self.assertTrue(any("fasādes kontūra" in i for i in c["issues"]))
+
+
+class TestSpatialAssociationOfDimensions(unittest.TestCase):
+    """Izmēru norāde pieder kontūrai tikai ar telpisku pierādījumu (izvilkuma līnijas pie šīs kontūras)."""
+
+    def test_linked_dimensions_record_where_extension_lines_start(self):
+        c = only(analyze(gen.build_sample_01())[2])
+        by_orientation = {d["orientation"]: d for d in c["dimensions"]}
+        self.assertTrue(all(d["linked_to_contour"] for d in c["dimensions"]))
+        self.assertEqual(by_orientation["H"]["link_side"], "apakšējās")      # izmēru līnija zem kontūras
+        self.assertEqual(by_orientation["V"]["link_side"], "kreisās")        # izmēru līnija pa kreisi
+        for d in c["dimensions"]:
+            self.assertAlmostEqual(d["link_gap_pt"], 2.0, delta=0.1)       # sprauga starp kontūru un izvilkuma līniju
+        self.assertTrue(any("sākas pie šīs kontūras apakšējās malas" in e for e in c["evidence"]))
+
+    def two_same_width(self, with_extension_lines):
+        def draw(sheet):
+            x0, y0, x1, y1 = gen._module(sheet, 150, 200, 12000, 4000, 50, dims=False, label="MODULIS M1")
+            if with_extension_lines:
+                sheet.dim_h(x0, x1, y1, 45, "12000")
+                sheet.dim_v(y0, y1, x0, -45, "4000")
+            else:                                                            # izmēru līnijas un teksts bez izvilkuma līnijām
+                sheet.line((x0, y1 + 45), (x1, y1 + 45))
+                sheet.page.insert_text(((x0 + x1) / 2 - 12, y1 + 42), "12000", fontsize=9)
+                sheet.line((x0 - 45, y0), (x0 - 45, y1))
+                sheet.number_v(x0 - 47.5, (y0 + y1) / 2 + 10, "4000")
+            # otrs taisnstūris citā lapas vietā ar TĀDU PAŠU platumu (x diapazons), bez savām izmēru norādēm
+            gen._module(sheet, 150, 520, 12000, 3000, 50, dims=False, label="MODULIS M2")
+        return analyze(custom_pdf(draw))[1]
+
+    def test_same_width_contour_elsewhere_does_not_take_a_foreign_dimension(self):
+        page = self.two_same_width(with_extension_lines=True)
+        c = only(page)                                                       # tikai A
+        self.assertEqual((c["length_mm"], c["width_mm"]), (12000, 4000))
+        self.assertAlmostEqual(c["bbox_pt"][1], 200, delta=0.1)
+        far = [e for e in page["excluded"] if e["kind"] == "unmeasured" and abs(e["bbox"][1] - 520) < 1]
+        self.assertEqual(len(far), 1)                                        # B: nav savu norāžu, svešo neņem
+
+    def test_without_extension_lines_a_coordinate_match_is_only_weak_and_lowers_the_status(self):
+        page = self.two_same_width(with_extension_lines=False)
+        by_y = {round(c["bbox_pt"][1]): c for c in page["candidates"]}
+        a, b = by_y[200], by_y[520]
+        for c in (a, b):
+            self.assertEqual(c["status"], UNCLEAR)
+            self.assertTrue(any("tikai sakrīt pēc koordinātēm" in i for i in c["issues"]))
+            self.assertFalse(any(d["linked_to_contour"] for d in c["dimensions"]))
+        self.assertEqual((b["length_mm"], b["width_mm"], b["transferable"]), (None, None, False))   # B pārņēma tikai vienu svešu norādi
+
+    def test_extension_lines_starting_far_from_the_contour_do_not_link(self):
+        def draw(sheet):
+            x0, y0, x1, y1 = gen._module(sheet, 150, 260, 12000, 4000, 50, dims=False)
+            sheet.dim_h(x0, x1, y1 + 30, 45, "12000")                         # izvilkuma līnijas sākas 30 pt zem kontūras
+            sheet.dim_v(y0, y1, x0 - 30, -45, "4000")
+        page = analyze(custom_pdf(draw))[1]
+        self.assertEqual(page["candidates"], [])
+        self.assertTrue(any(e["kind"] == "unmeasured" for e in page["excluded"]))
+
+
+class TestAdjacencyIsEvaluatedPerEdge(unittest.TestCase):
+    def test_one_marked_edge_does_not_clear_another_unmarked_edge(self):
+        # B ir saskarē ar A (augšā, robeža marķēta) un ar C (labajā pusē, robeža NAV marķēta).
+        def draw(sheet):
+            ax0, ay0, ax1, ay1 = gen._module(sheet, 300, 400 - gen.mm(2500, 50), 6000, 2500, 50,
+                                             label="MODULIS M1", dim_h_offset=-30, dim_v_offset=-45)
+            bx0, by0, bx1, by1 = gen._module(sheet, 300, 400, 6000, 3000, 50, label="MODULIS M2",
+                                             dim_h_offset=45, dim_v_offset=-45)
+            gen._module(sheet, bx1, 400, 4000, 3000, 50, label="MODULIS M3", dim_h_offset=45, dim_v_offset=45)
+            sheet.line((ax0, ay1), (ax1, ay1), width=1.2, dashes="[6 3] 0")      # robeža tikai starp A un B
+            sheet.text(ax0 + 60, ay1 - 6, "MODEĻU ROBEŽA", size=8)
+        page = analyze(custom_pdf(draw))[1]
+        a, b, c = sorted(page["candidates"], key=lambda k: (k["bbox_pt"][1], k["bbox_pt"][0]))
+        self.assertEqual((a["length_mm"], b["length_mm"], c["length_mm"]), (6000, 6000, 4000))
+        self.assertEqual(a["status"], CONSISTENT)                            # A: vienīgā kaimiņa robeža marķēta
+        self.assertEqual(b["status"], UNCLEAR)                               # B: viena mala marķēta, otra nē
+        self.assertEqual(c["status"], UNCLEAR)
+        self.assertEqual(sorted(n["id"] for n in b["boundary"]["neighbours"]), sorted([a["id"], c["id"]]))
+        self.assertEqual({n["id"]: n["separator"] is not None for n in b["boundary"]["neighbours"]},
+                         {a["id"]: True, c["id"]: False})
+        self.assertIsNotNone(b["boundary"]["separator"])                     # vienas malas pierādījums netiek zaudēts
+        self.assertTrue(any(c["id"] in i and "nav marķēta" in i for i in b["issues"]))
+
+
+class TestStatusWording(unittest.TestCase):
+    def test_consistent_status_is_qualified_not_called_proven(self):
+        c = only(analyze(gen.build_sample_01())[2])
+        self.assertEqual(c["status"], "ģeometriski saskaņots")
+        self.assertNotEqual(c["status"], "pierādīts")
+        self.assertIn("NEPIERĀDA", c["disclaimer"])
+        self.assertIn("fasādes", c["disclaimer"])
+        self.assertIn("prototipa pielaides", c["disclaimer"])
+        text = " ".join(c["evidence"])
+        self.assertIn("prototipa pielaide", text)
+        self.assertIn("nevis konstrukcijas robežas pierādījums", text)    # moduļa teksts ir tikai marķējums
+
+    def test_every_candidate_carries_the_disclaimer(self):
+        for builder in (gen.build_sample_02, gen.build_sample_04, gen.build_sample_05, gen.build_sample_06, gen.build_sample_09):
+            for c in analyze(builder())[1]["candidates"]:
+                self.assertIn("NEPIERĀDA", c["disclaimer"])
 
 
 class TestNotChosenByLargestNumberOrSize(unittest.TestCase):
@@ -293,7 +392,7 @@ class TestNotChosenByLargestNumberOrSize(unittest.TestCase):
     def test_module_label_on_inner_contour_resolves_the_nesting(self):
         page = analyze(gen.build_sample_09(inner_label=True))[1]
         c = only(page)
-        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (PROVEN, 12000, 4000))
+        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (CONSISTENT, 12000, 4000))
         self.assertTrue(any(e["kind"] == "nested" and e["dimensions"] == [12400, 4400] for e in page["excluded"]))
 
 
@@ -307,13 +406,13 @@ class TestRotatedAndVerticalAndNoVectors(unittest.TestCase):
         with pymupdf.open(stream=self.data, filetype="pdf") as doc:
             self.assertEqual(doc[0].rotation, 90)
         c = only(self.result[1])
-        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (PROVEN, 12000, 4000))
+        self.assertEqual((c["status"], c["length_mm"], c["width_mm"]), (CONSISTENT, 12000, 4000))
         self.assertEqual(self.result[1]["rotation"], 90)
         self.assertAlmostEqual(c["bbox_pt"][2] - c["bbox_pt"][0], 680.31, delta=0.1)
 
     def test_vertically_drawn_module(self):
         c = only(self.result[2])
-        self.assertEqual((c["status"], c["length_mm"], c["width_mm"], c["orientation"]), (PROVEN, 12000, 4000, "vertikāla"))
+        self.assertEqual((c["status"], c["length_mm"], c["width_mm"], c["orientation"]), (CONSISTENT, 12000, 4000, "vertikāla"))
         self.assertAlmostEqual(c["bbox_pt"][3] - c["bbox_pt"][1], 680.31, delta=0.1)
         self.assertAlmostEqual(c["bbox_pt"][2] - c["bbox_pt"][0], 226.77, delta=0.1)
 
@@ -348,7 +447,7 @@ class TestPreview(unittest.TestCase):
         c = page["candidates"][0]
         (r, g, b), width, height = self.pixel(png, (c["bbox_pt"][0] + c["bbox_pt"][2]) / 2, c["bbox_pt"][1])
         self.assertEqual((width, height), (1191, 842))
-        self.assertTrue(g > r + 60 and g > b + 40, (r, g, b))       # zaļš = pierādīts
+        self.assertTrue(g > r + 60 and g > b + 40, (r, g, b))       # zaļš = ģeometriski saskaņots
 
     def test_refused_candidate_is_red_and_unclear_is_orange(self):
         for builder, expected in ((gen.build_sample_06, "red"), (gen.build_sample_05, "orange")):

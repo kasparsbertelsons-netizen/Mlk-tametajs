@@ -658,7 +658,7 @@ class TestVectorCandidatesUI(unittest.TestCase):
         at = start_bytes(sample(self.S01))
         rows = vector_table(at)
         self.assertEqual([(r["Kandidāts"], r["Lapa"], r["Statuss"], r["L (mm)"], r["W (mm)"]) for r in rows],
-                         [("P2-K1", 2, "pierādīts", 12000, 4000)])
+                         [("P2-K1", 2, "ģeometriski saskaņots", 12000, 4000)])
         self.assertIn("1:50", rows[0]["Mērogs"])
         self.assertEqual(len(at.get("image")), 1)                       # priekšskatījums ar iezīmētu kontūru
         text = " ".join(m.value for m in at.markdown)
@@ -699,7 +699,7 @@ class TestVectorCandidatesUI(unittest.TestCase):
 
     def test_two_modules_are_transferred_and_confirmed_separately(self):
         at = start_bytes(sample(self.S03))
-        self.assertEqual([r["Statuss"] for r in vector_table(at)], ["pierādīts", "pierādīts"])
+        self.assertEqual([r["Statuss"] for r in vector_table(at)], ["ģeometriski saskaņots", "ģeometriski saskaņots"])
         at.number_input(key="ad_module_count").set_value(2).run()
         transfer(pick_candidate(at, "P1-K1"), 1)
         transfer(pick_candidate(at, "P1-K2"), 2)
@@ -718,7 +718,88 @@ class TestVectorCandidatesUI(unittest.TestCase):
         self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
         transfer(pick_candidate(at, "P1-K2"), 1)                          # tas pats modulis, citi L/W
         self.assertEqual(metrics(at), [])
-        self.assertTrue(any("apstiprinājums atcelts" in w for w in warnings(at)))
+        self.assertNotIn(0, at.session_state["ad_confirmations"])         # pārnešana dzēš apstiprinājumu
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+
+    def test_retransferring_the_same_confirmed_candidate_clears_the_confirmation(self):
+        # Fingerprint pēc atkārtotas pārnešanas būtu identisks: apstiprinājums tomēr jādzēš katrā pārnešanā.
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        transfer(at)                                                      # tā pati vērtība, tas pats kandidāts
+        self.assertEqual((at.number_input(key="ad_L_0").value, at.number_input(key="ad_W_0").value), (12000, 4000))
+        self.assertEqual(metrics(at), [])
+        self.assertNotIn(0, at.session_state["ad_confirmations"])
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+        confirm(at, 0)                                                    # jauns apstiprinājums atjauno aprēķinu
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+
+    def test_retransfer_clears_only_the_target_module_confirmation(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(pick_candidate(at, "P1-K2"), 2)
+        confirm(at, 0)
+        confirm(at, 1)
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "42")
+        transfer(pick_candidate(at, "P1-K2"), 2)                          # atkārtoti tas pats uz 2. moduli
+        self.assertEqual(sorted(at.session_state["ad_confirmations"]), [0])
+        self.assertTrue(any("NEPILNS APRĒĶINS (1 no 2" in w for w in warnings(at)))
+
+    def test_one_candidate_cannot_be_counted_in_two_modules(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(at, 2)                                                   # tas pats P1-K1 uz 2. moduli
+        self.assertTrue(any("BRĪDINĀJUMS" in w and "jau ir izvēlēts 1" in w for w in warnings(at)))
+        confirm(at, 0)
+        confirm(at, 1)
+        self.assertTrue(any("jau ir izmantots 1. modulī" in e and "bloķēta" in e for e in errors(at)))
+        self.assertEqual(metric(at, "Sijas moduļā (gab.)"), "21")          # tikai pirmais modulis
+        self.assertEqual([lab for lab, _ in metrics(at)].count("Sijas moduļā (gab.)"), 1)
+        self.assertTrue(any("NEPILNS APRĒĶINS (1 no 2" in w for w in warnings(at)))
+        labels = [lab for lab, _ in metrics(at)]
+        self.assertNotIn("Sijas kopā (gab.)", labels)                     # nav kopsummas
+        self.assertEqual(len(at.get("download_button")), 0)               # nav CSV
+
+    def test_duplicate_is_resolved_by_choosing_a_different_candidate_or_manual_source(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(at, 2)
+        at.selectbox(key="ad_src_1").set_value("Ievadīts manuāli").run()   # apzināti manuāls modulis
+        enter(at, 1, 12000, 3600)
+        self.assertEqual(errors(at), [])
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "42")
+        self.assertFalse(any("NEPILNS" in w for w in warnings(at)))
+
+    def test_manually_corrected_values_mark_the_source_as_corrected(self):
+        at = transfer(start_bytes(sample(self.S01)))
+        at.number_input(key="ad_L_0").set_value(12100).run()
+        self.assertTrue(any("manuāli koriģēts" in w and "P2-K1" in w for w in warnings(at)))
+        confirm(at, 0)
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertIn("vektoru kandidāts P2-K1", source)
+        self.assertIn("MANUĀLI KORIĢĒTS", source)
+        self.assertIn("12100×4000", source)
+        self.assertIn("12000×4000", source)                                # kandidāta oriģinālā vērtība
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.20704 m³")    # aprēķins no ievadītā, ne no kandidāta
+
+    def test_unchanged_transferred_values_are_not_marked_as_corrected(self):
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertEqual(source, "PDF 2. lapa, vektoru kandidāts P2-K1")
+        self.assertFalse(any("manuāli koriģēts" in w for w in warnings(at)))
+
+    def test_transfer_warnings_do_not_call_the_status_proven(self):
+        at = start_bytes(sample(self.S01))
+        self.assertTrue(any("nenozīmē konstruktīvi pierādītu" in w for w in warnings(at)))      # arī saskaņotam
+        self.assertEqual({r["Statuss"] for r in vector_table(at)}, {"ģeometriski saskaņots"})
+        self.assertNotIn("pierādīts", {r["Statuss"] for r in vector_table(at)})
+        self.assertTrue(any("ģeometriski saskaņots" in c.value and "NEPIERĀDA" in c.value for c in at.caption))
+        unclear = start_bytes(sample("ad_vector_05_scale_missing.pdf"))
+        self.assertTrue(any("pierādījumu nepietiek" in w for w in warnings(unclear)))
+        self.assertFalse(any("nenozīmē konstruktīvi" in w for w in warnings(unclear)))
 
     def test_changing_transferred_values_cancels_the_confirmation(self):
         at = confirm(transfer(start_bytes(sample(self.S01))), 0)
@@ -744,7 +825,7 @@ class TestVectorCandidatesUI(unittest.TestCase):
         for name in ("ad_vector_05_scale_missing.pdf", "ad_vector_09_facade_and_inner_contour.pdf"):
             at = start_bytes(sample(name))
             self.assertEqual({r["Statuss"] for r in vector_table(at)}, {"neskaidrs"}, name)
-            self.assertTrue(any("nav pilnībā pierādīta" in w for w in warnings(at)), name)
+            self.assertTrue(any("pierādījumu nepietiek" in w for w in warnings(at)), name)
             transfer(at)
             self.assertNotEqual(at.number_input(key="ad_L_0").value, 0, name)
             self.assertEqual(metrics(at), [], name)                        # joprojām jāapstiprina

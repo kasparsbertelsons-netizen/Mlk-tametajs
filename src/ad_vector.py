@@ -12,9 +12,12 @@ Ko dara:
    Virsraksta mērogs netiek vienkārši pieņemts.
 5. Kandidātam piešķir statusu un pierādījumus (lapa, bbox, mērogs un avots, izmēru norādes, problēmas).
 
-Statusi: "pierādīts" (taisnstūris + abi izmēri + mērogs pārbaudīts + moduļa marķējums, bez pretrunām),
-"atpazīts" (tas pats, bet kontūras nozīme nav pierādīta: var būt fasādes kontūra),
-"neskaidrs" (pierādījumu nepietiek) un "atteikums" (neregulāra forma vai pretrunas: L/W netiek dots).
+Statusi: "ģeometriski saskaņots" (taisnstūris + abi izmēri telpiski saistīti ar kontūru + mērogs pārbaudīts
++ moduļa teksta marķējums, bez pretrunām), "atpazīts" (tas pats bez moduļa marķējuma), "neskaidrs"
+(pierādījumu nepietiek) un "atteikums" (neregulāra forma vai pretrunas: L/W netiek dots).
+**Neviens statuss nepierāda, ka kontūra ir grīdas rāmja (nevis fasādes) konstrukcijas robeža**; teksts
+"MODULIS" kontūras iekšpusē ir tikai marķējums. Lietotāja apstiprinājums vienmēr ir obligāts.
+Pielaides (±2 pt, ±2 %, 8 pt) ir PROTOTIPA pielaides līdz reālu rasējumu validācijai.
 Telpas un terases netiek uzskatītas par moduļiem. Blakus kontūras netiek apvienotas, un L/U forma
 netiek sadalīta. Lietotājs vienmēr apstiprina izmērus (src/ad_ui.py).
 
@@ -30,16 +33,21 @@ import pymupdf
 from src.ad_plan import TERRACE_RE
 
 MM_PER_PT = 25.4 / 72
+# PROTOTIPA pielaides: nav validētas uz reāliem rasējumiem (jāpārskata pēc validācijas).
 AXIS_TOL = 0.3          # pt: nogrieznis uzskatāms par horizontālu/vertikālu
-EDGE_TOL = 2.0          # pt: izmēru/izvilkuma līnijas gali pret kontūras malu
+EDGE_TOL = 2.0          # pt: izmēru līnijas gali pret kontūras malu
 EXT_TOL = 1.5           # pt: izvilkuma līnijas novietojums pret izmēru līnijas galu
+EXT_LINK_TOL = 8.0      # pt: izvilkuma līnijas tuvākajam galam jāatrodas pie kontūras malas
 ASSOC_DIST = 14.0       # pt: izmēra teksta centrs pret izmēru līniju
 SCALE_TOL = 0.02        # relatīvā pielaide mērogam un izmēru atbilstībai
 FRAME_AREA_RATIO = 0.80
 STANDARD_SCALES = (10, 20, 25, 50, 75, 100, 125, 150, 200, 250, 500)
 
-PROVEN, RECOGNISED, UNCLEAR, REFUSED = "pierādīts", "atpazīts", "neskaidrs", "atteikums"
-TRANSFERABLE = (PROVEN, RECOGNISED, UNCLEAR)
+CONSISTENT, RECOGNISED, UNCLEAR, REFUSED = "ģeometriski saskaņots", "atpazīts", "neskaidrs", "atteikums"
+TRANSFERABLE = (CONSISTENT, RECOGNISED, UNCLEAR)
+DISCLAIMER = ("Statuss apliecina tikai ģeometrisku saskaņotību (kontūra, izmēru norādes, mērogs). Tas NEPIERĀDA, "
+              "ka kontūra ir grīdas rāmja (nevis fasādes) konstrukcijas robeža; lietotāja apstiprinājums ir "
+              "obligāts. Pielaides (±2 pt, ±2 %, 8 pt) ir prototipa pielaides, nevalidētas uz reāliem rasējumiem.")
 
 NUMBER_RE = re.compile(r"\d{3,5}")
 SCALE_RE = re.compile(r"(?<![\d:])1\s*:\s*(\d{1,4})(?!\d)")
@@ -195,15 +203,38 @@ def _find_dimensions(texts, segments):
         cross = "V" if orient == "H" else "H"
         ext = []
         for end in (seg["a"], seg["b"]):
-            found = any(o["orientation"] == cross and abs(o["pos"] - end) <= EXT_TOL
-                        and o["a"] - 4 <= seg["pos"] <= o["b"] + 4 for o in solid)
-            ext.append(found)
+            ext.append([(o["a"], o["b"]) for o in solid
+                        if o["orientation"] == cross and abs(o["pos"] - end) <= EXT_TOL
+                        and o["a"] - 4 <= seg["pos"] <= o["b"] + 4])
         dimensions.append({
             "id": f"D{len(dimensions) + 1}", "orientation": orient, "value_mm": int(text["text"]),
             "text_bbox": text["bbox"], "start": seg["a"], "end": seg["b"], "position": seg["pos"],
-            "measured_pt": seg["b"] - seg["a"], "extension_start": ext[0], "extension_end": ext[1],
+            "measured_pt": seg["b"] - seg["a"], "extension_start": bool(ext[0]), "extension_end": bool(ext[1]),
+            "ext_start_segs": ext[0], "ext_end_segs": ext[1],
         })
     return dimensions
+
+
+def _link_to_contour(dim, bbox):
+    """Telpiska sasaiste starp izmēru norādi un konkrētu kontūru.
+
+    ("linked", mala, sprauga): abu izvilkuma līniju tuvākie gali atrodas pie vienas šīs kontūras malas.
+    ("weak", None, None): izvilkuma līniju nav abos galos; sakrīt tikai koordinātas (nav pierādīts, ka
+    norāde pieder šai kontūrai: citā vietā lapā var būt cita kontūra ar tādu pašu platumu).
+    ("foreign", None, None): izvilkuma līnijas ir, bet sākas citur: norāde pieder citai kontūrai.
+    """
+    if not (dim["ext_start_segs"] and dim["ext_end_segs"]):
+        return "weak", None, None
+    x0, y0, x1, y1 = bbox
+    edges = ((("augšējās", y0), ("apakšējās", y1)) if dim["orientation"] == "H"
+             else (("kreisās", x0), ("labās", x1)))
+    best = None
+    for side, edge in edges:
+        gap = max(min(min(abs(a - edge), abs(b - edge)) for a, b in segs)
+                  for segs in (dim["ext_start_segs"], dim["ext_end_segs"]))
+        if gap <= EXT_LINK_TOL and (best is None or gap < best[1]):
+            best = (side, gap)
+    return ("linked", best[0], best[1]) if best else ("foreign", None, None)
 
 
 def _declared_scale(texts):
@@ -355,7 +386,9 @@ def analyze_page(page, page_number):
         for dim in dimensions:
             lo, hi = (x0, x1) if dim["orientation"] == "H" else (y0, y1)
             if abs(dim["start"] - lo) <= EDGE_TOL and abs(dim["end"] - hi) <= EDGE_TOL:
-                matches.append(dim)
+                link, side, gap = _link_to_contour(dim, contour["bbox"])
+                if link != "foreign":          # izvilkuma līnijas sākas citur: norāde pieder citai kontūrai
+                    matches.append({**dim, "link": link, "link_side": side, "link_gap": gap})
         contour["matches"] = matches
         labels = contour["labels"]
         contour["module_label"] = next((l for l in labels if MODULE_RE.search(l)), None)
@@ -414,14 +447,15 @@ def analyze_page(page, page_number):
             for k, other in ((i, j), (j, i)):
                 cand = candidates[k]
                 cand["boundary"]["adjacent_to"].append(candidates[other]["id"])
+                cand["boundary"]["neighbours"].append({"id": candidates[other]["id"], "separator": separator})
                 if separator:
-                    cand["boundary"]["separator"] = separator
+                    cand["boundary"]["separator"] = cand["boundary"]["separator"] or separator
                     cand["evidence"].append(
-                        f"Moduļu robeža ar {candidates[other]['id']} pierādīta: {separator['type']} "
+                        f"Moduļu robeža ar {candidates[other]['id']} marķēta zīmējumā: {separator['type']} "
                         f"(pozīcija {separator['position_pt']} pt).")
                 else:
                     cand["issues"].append(
-                        f"Blakus kontūra {candidates[other]['id']}: moduļu robeža nav pierādīta "
+                        f"Blakus kontūra {candidates[other]['id']}: moduļu robeža zīmējumā nav marķēta "
                         "(var būt viens modulis vai divi); kontūras netiek apvienotas.")
     for cand in candidates:
         _finalize_status(cand)
@@ -447,14 +481,20 @@ def _build_candidate(page_number, number, contour, declared):
         "vertices_pt": [[_r(x, 2), _r(y, 2)] for x, y in contour["vertices"]],
         "line_width_pt": _r(contour["line_width"], 2), "length_mm": None, "width_mm": None,
         "status": UNCLEAR, "evidence": [], "issues": [], "transferable": False,
-        "boundary": {"label": contour["module_label"], "adjacent_to": [], "separator": None},
+        "boundary": {"label": contour["module_label"], "adjacent_to": [], "separator": None,
+                     "neighbours": []},
         "scale": None, "dimensions": [], "observed_mm": {"horizontal": None, "vertical": None},
+        "disclaimer": DISCLAIMER,
         "_flags": {"nested_ambiguous": contour["nested_ambiguous"],
                    "role_conflict": contour.get("role_conflict", False)},
     }
     extents = {"H": x1 - x0, "V": y1 - y0}
     chosen, conflicts = {}, []
-    for dim in contour["matches"]:
+    pool = [d for d in contour["matches"]]
+    for orient in ("H", "V"):           # telpiski saistītās norādes ir prioritāras pār vājajām
+        if any(d["link"] == "linked" for d in pool if d["orientation"] == orient):
+            pool = [d for d in pool if d["orientation"] != orient or d["link"] == "linked"]
+    for dim in pool:
         previous = chosen.get(dim["orientation"])
         if previous is None:
             chosen[dim["orientation"]] = dim
@@ -472,17 +512,25 @@ def _build_candidate(page_number, number, contour, declared):
         implied_values.append(implied)
         name = "Horizontālā" if orient == "H" else "Vertikālā"
         ext = dim["extension_start"] and dim["extension_end"]
+        linked = dim["link"] == "linked"
         candidate["dimensions"].append({
             "id": dim["id"], "orientation": orient, "value_mm": dim["value_mm"],
             "text_bbox_pt": _bbox(dim["text_bbox"]), "measured_pt": _r(extents[orient], 2),
-            "implied_denominator": _r(implied, 2), "extension_lines_both_ends": ext})
+            "implied_denominator": _r(implied, 2), "extension_lines_both_ends": ext,
+            "linked_to_contour": linked, "link_side": dim["link_side"],
+            "link_gap_pt": _r(dim["link_gap"], 2) if dim["link_gap"] is not None else None})
         candidate["evidence"].append(
             f"{name} izmēru norāde '{dim['value_mm']}' ({dim['id']}): izmēru līnijas gali "
-            f"({_r(dim['start'], 1)}; {_r(dim['end'], 1)} pt) sakrīt ar kontūras malām (±{EDGE_TOL} pt); "
-            f"izmērītais garums {_r(extents[orient], 1)} pt, izsecinātais mērogs 1:{implied:.1f}"
-            + ("; izvilkuma līnijas abos galos." if ext else "; BEZ izvilkuma līnijām abos galos."))
-        if not ext:
-            candidate["issues"].append(f"{name} izmēru norādei ({dim['id']}) nav izvilkuma līniju abos galos.")
+            f"({_r(dim['start'], 1)}; {_r(dim['end'], 1)} pt) sakrīt ar kontūras malām (prototipa pielaide "
+            f"±{EDGE_TOL} pt); izmērītais garums {_r(extents[orient], 1)} pt, izsecinātais mērogs 1:{implied:.1f}"
+            + (f"; izvilkuma līnijas sākas pie šīs kontūras {dim['link_side']} malas (sprauga "
+               f"{_r(dim['link_gap'], 1)} pt ≤ {EXT_LINK_TOL} pt, prototipa pielaide)." if linked
+               else "; izvilkuma līniju nav abos galos: saistība ar šo kontūru NAV pierādīta telpiski."))
+        if not linked:
+            candidate["issues"].append(
+                f"{name} izmēru norāde ({dim['id']}) tikai sakrīt pēc koordinātēm ar kontūras malām; "
+                "izvilkuma līnijas nav pierādītas pie šīs kontūras, tāpēc saistība nav droša "
+                "(var piederēt citai kontūrai ar tādu pašu izmēru).")
     scale = _evaluate_scale(declared, implied_values)
     candidate["scale"] = scale
     candidate["issues"].extend(scale["notes"])
@@ -498,7 +546,9 @@ def _build_candidate(page_number, number, contour, declared):
         f"{page_number}: bbox ({_r(x0, 1)}; {_r(y0, 1)})–({_r(x1, 1)}; {_r(y1, 1)}) pt, "
         f"{len(contour['vertices'])} virsotnes, līnijas biezums {_r(contour['line_width'], 1)} pt."))
     if contour["module_label"]:
-        candidate["evidence"].append(f"Moduļa marķējums '{contour['module_label']}' kontūras iekšpusē.")
+        candidate["evidence"].append(
+            f"Moduļa teksta marķējums '{contour['module_label']}' kontūras iekšpusē (marķējums, nevis "
+            "konstrukcijas robežas pierādījums).")
     return candidate
 
 
@@ -507,7 +557,7 @@ def _finalize_status(candidate):
     chosen = candidate.pop("_chosen")
     scale = candidate["scale"]
     issues = candidate["issues"]
-    full_ext = all(d["extension_lines_both_ends"] for d in candidate["dimensions"]) and chosen
+    all_linked = bool(chosen) and all(d["linked_to_contour"] for d in candidate["dimensions"])
     label = candidate["boundary"]["label"]
     values = [chosen[o]["value_mm"] for o in ("H", "V") if o in chosen]
 
@@ -527,12 +577,13 @@ def _finalize_status(candidate):
                           "(var būt fasādes kontūra).")
         if flags["role_conflict"]:
             issues.append("Kontūrā ir gan moduļa, gan telpas/terases marķējums.")
-        adjacency_open = bool(candidate["boundary"]["adjacent_to"]) and not candidate["boundary"]["separator"]
-        clean = (scale["status"] == "pārbaudīts" and full_ext and not flags["nested_ambiguous"]
+        # katra kopējā mala jāmarķē atsevišķi: viena marķēta mala nepadara neskaidru otru
+        adjacency_open = any(n["separator"] is None for n in candidate["boundary"]["neighbours"])
+        clean = (scale["status"] == "pārbaudīts" and all_linked and not flags["nested_ambiguous"]
                  and not flags["role_conflict"] and not adjacency_open
                  and not any("pretrunīgas" in i for i in issues))
         if clean and label:
-            status = PROVEN
+            status = CONSISTENT
         elif clean:
             status = RECOGNISED
             issues.append("Nav pierādīts, ka šī kontūra ir grīdas rāmja robeža (var būt fasādes kontūra): "
@@ -566,7 +617,7 @@ def analyze_pdf(data: bytes, pages):
     return {"pages": results}
 
 
-STATUS_COLORS = {PROVEN: (0.10, 0.60, 0.25), RECOGNISED: (0.20, 0.60, 0.20),
+STATUS_COLORS = {CONSISTENT: (0.10, 0.60, 0.25), RECOGNISED: (0.20, 0.60, 0.20),
                  UNCLEAR: (0.95, 0.55, 0.05), REFUSED: (0.85, 0.10, 0.10)}
 
 

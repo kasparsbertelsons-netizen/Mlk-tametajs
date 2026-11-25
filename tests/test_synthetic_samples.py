@@ -87,15 +87,15 @@ class TestExpectedResultsPerSample(unittest.TestCase):
                 for page, info in pipeline(data).items()}
 
     def test_expected(self):
-        self.assertEqual(self.summary("ad_vector_01_12000x4000_1to50.pdf"), {2: [("pierādīts", 12000, 4000)]})
-        self.assertEqual(self.summary("ad_vector_02_12100x3600_1to100.pdf"), {1: [("pierādīts", 12100, 3600)]})
+        self.assertEqual(self.summary("ad_vector_01_12000x4000_1to50.pdf"), {2: [("ģeometriski saskaņots", 12000, 4000)]})
+        self.assertEqual(self.summary("ad_vector_02_12100x3600_1to100.pdf"), {1: [("ģeometriski saskaņots", 12100, 3600)]})
         self.assertEqual(self.summary("ad_vector_03_two_modules_with_boundary.pdf"),
-                         {1: [("pierādīts", 12000, 4000), ("pierādīts", 12000, 3600)]})
+                         {1: [("ģeometriski saskaņots", 12000, 4000), ("ģeometriski saskaņots", 12000, 3600)]})
         self.assertEqual(self.summary("ad_vector_04_L_shape_unclear.pdf"), {1: [("atteikums", None, None)]})
         self.assertEqual(self.summary("ad_vector_05_scale_missing.pdf"), {1: [("neskaidrs", 12000, 4000)]})
         self.assertEqual(self.summary("ad_vector_06_scale_conflict.pdf"), {1: [("atteikums", None, None)]})
         self.assertEqual(self.summary("ad_vector_07_rotated_and_vertical.pdf"),
-                         {1: [("pierādīts", 12000, 4000)], 2: [("pierādīts", 12000, 4000)]})
+                         {1: [("ģeometriski saskaņots", 12000, 4000)], 2: [("ģeometriski saskaņots", 12000, 4000)]})
         self.assertEqual(self.summary("ad_vector_08_no_vector_geometry.pdf"),
                          {1: "no_vector_geometry", 2: "no_vector_geometry"})
         self.assertEqual(self.summary("ad_vector_09_facade_and_inner_contour.pdf"),
