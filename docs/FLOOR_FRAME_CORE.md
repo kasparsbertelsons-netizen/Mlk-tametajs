@@ -68,3 +68,6 @@ Visi `@expectedFailure` testi ir aizstāti ar parastiem testiem pēc faktiskas p
 
 ## Testēšanas vide
 Python 3.13, Streamlit 1.67.0, PyMuPDF 1.28.2; `requirements.txt` zemākās versijas ir šīs. `TestEnvironment` pārbauda, ka uzstādītās versijas atbilst `requirements.txt`, un ka AppTest atbalsta failu augšupielādi; citādi testi krīt, nevis tiek izlaisti.
+
+## Vektoru kandidāti
+L un W var tikt pārnesti no vektoru kandidāta (prototips): skat. `docs/AD_VECTOR_PROTOTYPE.md`. Pārnešana apstiprinājumu neizdara; visi apstiprināšanas noteikumi iepriekš paliek spēkā.

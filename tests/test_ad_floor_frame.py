@@ -14,6 +14,7 @@ from unittest import mock
 from importlib.metadata import version
 from pathlib import Path
 
+import pandas as pd
 import pymupdf
 from packaging.requirements import Requirement
 
@@ -22,6 +23,7 @@ from streamlit.testing.v1 import AppTest
 from streamlit.testing.v1.element_tree import FileUploader
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
+SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples" / "ad_vector"
 AD_MODE = "AD — prognozēt rāmi"
 PD_MODE = "PD — nolasīt specifikāciju"
 
@@ -54,6 +56,40 @@ def start(pages=None, mode=AD_MODE):
         at.file_uploader[0].upload("synthetic.pdf", make_pdf(pages), "application/pdf").run()
     assert not at.exception, at.exception
     return at
+
+
+def sample(name):
+    return (SAMPLES_DIR / name).read_bytes()
+
+
+def start_bytes(data):
+    """Palaiž lietotni un augšupielādē gatavu PDF (piem., paraugu no samples/ad_vector)."""
+    at = AppTest.from_file(APP, default_timeout=90).run()
+    at.file_uploader[0].upload("sample.pdf", data, "application/pdf").run()
+    assert not at.exception, at.exception
+    return at
+
+
+def pick_candidate(at, prefix):
+    box = at.selectbox(key="ad_vec_pick")
+    label = next(option for option in box.options if option.startswith(prefix))
+    box.set_value(label).run()
+    assert not at.exception, at.exception
+    return at
+
+
+def transfer(at, target=1):
+    at.selectbox(key="ad_vec_target").set_value(target).run()
+    at.button(key="ad_vec_transfer").click().run()
+    assert not at.exception, at.exception
+    return at
+
+
+def vector_table(at):
+    for frame in at.dataframe:
+        if "Statuss" in frame.value.columns:
+            return frame.value.to_dict("records")
+    return []
 
 
 def confirm(at, index):
@@ -609,6 +645,226 @@ class TestSessionDataHandling(unittest.TestCase):
         at = start([FLOOR + "\nTerase 4500"])
         self.assertTrue(any("negarantē" in c.value and "terase" in c.value for c in at.caption))
         self.assertTrue(any("pagaidu kandidātu saraksts" in c.value for c in at.caption))
+
+
+class TestVectorCandidatesUI(unittest.TestCase):
+    """Vektoru kandidāti → pārnešana → OBLIGĀTS apstiprinājums → aprēķins (repozitorija paraugi)."""
+
+    S01 = "ad_vector_01_12000x4000_1to50.pdf"
+    S02 = "ad_vector_02_12100x3600_1to100.pdf"
+    S03 = "ad_vector_03_two_modules_with_boundary.pdf"
+
+    def test_candidate_preview_and_evidence_are_shown(self):
+        at = start_bytes(sample(self.S01))
+        rows = vector_table(at)
+        self.assertEqual([(r["Kandidāts"], r["Lapa"], r["Statuss"], r["L (mm)"], r["W (mm)"]) for r in rows],
+                         [("P2-K1", 2, "ģeometriski saskaņots", 12000, 4000)])
+        self.assertIn("1:50", rows[0]["Mērogs"])
+        self.assertEqual(len(at.get("image")), 1)                       # priekšskatījums ar iezīmētu kontūru
+        text = " ".join(m.value for m in at.markdown)
+        self.assertIn("Horizontālā izmēru norāde '12000'", text)
+        self.assertIn("Vertikālā izmēru norāde '4000'", text)
+        self.assertIn("MODULIS M1", text)
+        self.assertTrue(any("NAV pierādījums" in c.value for c in at.caption))     # prototipa atruna
+
+    def test_room_terrace_roof_and_cover_are_not_candidates(self):
+        at = start_bytes(sample(self.S01))
+        self.assertEqual({r["Kandidāts"] for r in vector_table(at)}, {"P2-K1"})
+        excluded = next(f.value.to_dict("records") for f in at.dataframe if "Veids" in f.value.columns)
+        self.assertEqual({(e["Veids"], e["Izmēri (mm)"]) for e in excluded}, {("room", "3500"), ("terrace", "4500")})
+        self.assertEqual(metrics(at), [])
+
+    def test_transfer_does_not_confirm_then_confirmation_gives_acceptance_numbers(self):
+        at = transfer(start_bytes(sample(self.S01)))
+        self.assertEqual((at.number_input(key="ad_L_0").value, at.number_input(key="ad_W_0").value), (12000, 4000))
+        self.assertEqual(at.selectbox(key="ad_src_0").value, "PDF 2. lapa, vektoru kandidāts P2-K1")
+        self.assertEqual(metrics(at), [])                                  # pārnešana neapstiprina
+        self.assertTrue(any("NAV izdarīts" in i.value for i in at.info))
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Šķērssijas (gab.)"), "17")
+        self.assertEqual(metric(at, "Sijas moduļā (gab.)"), "21")
+        self.assertEqual(metric(at, "Kokmateriāli moduļā"), "2.15856 m³")
+        self.assertEqual(metric(at, "Atlikums (mm)"), "635")
+        self.assertTrue(any("635" in w and "jāpārbauda" in w for w in warnings(at)))
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertEqual(source, "PDF 2. lapa, vektoru kandidāts P2-K1")
+
+    def test_12100x3600_after_confirmation(self):
+        at = confirm(transfer(start_bytes(sample(self.S02))), 0)
+        self.assertEqual(metric(at, "Sijas moduļā (gab.)"), "22")
+        self.assertEqual(metric(at, "Kokmateriāli moduļā"), "2.09088 m³")
+        self.assertEqual(metric(at, "Atlikums (mm)"), "90")
+        self.assertFalse(any("jāpārbauda" in w and "Atlikums" in w for w in warnings(at)))
+
+    def test_two_modules_are_transferred_and_confirmed_separately(self):
+        at = start_bytes(sample(self.S03))
+        self.assertEqual([r["Statuss"] for r in vector_table(at)], ["ģeometriski saskaņots", "ģeometriski saskaņots"])
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(pick_candidate(at, "P1-K2"), 2)
+        self.assertEqual([(at.number_input(key=f"ad_L_{i}").value, at.number_input(key=f"ad_W_{i}").value) for i in (0, 1)],
+                         [(12000, 4000), (12000, 3600)])
+        self.assertEqual(metrics(at), [])
+        confirm(at, 0)
+        self.assertTrue(any("NEPILNS APRĒĶINS (1 no 2" in w for w in warnings(at)))
+        confirm(at, 1)
+        self.assertEqual(metric(at, "Aprēķinātie moduļi"), "2")
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "42")           # 21 + 21
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "4.20528 m³")     # 2,15856 + 2,04672
+
+    def test_transferring_another_candidate_cancels_the_confirmation(self):
+        at = confirm(transfer(start_bytes(sample(self.S03))), 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        transfer(pick_candidate(at, "P1-K2"), 1)                          # tas pats modulis, citi L/W
+        self.assertEqual(metrics(at), [])
+        self.assertNotIn(0, at.session_state["ad_confirmations"])         # pārnešana dzēš apstiprinājumu
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+
+    def test_retransferring_the_same_confirmed_candidate_clears_the_confirmation(self):
+        # Fingerprint pēc atkārtotas pārnešanas būtu identisks: apstiprinājums tomēr jādzēš katrā pārnešanā.
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+        transfer(at)                                                      # tā pati vērtība, tas pats kandidāts
+        self.assertEqual((at.number_input(key="ad_L_0").value, at.number_input(key="ad_W_0").value), (12000, 4000))
+        self.assertEqual(metrics(at), [])
+        self.assertNotIn(0, at.session_state["ad_confirmations"])
+        self.assertTrue(any("gaida apstiprinājumu" in i.value.lower() for i in at.info))
+        confirm(at, 0)                                                    # jauns apstiprinājums atjauno aprēķinu
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
+
+    def test_retransfer_clears_only_the_target_module_confirmation(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(pick_candidate(at, "P1-K2"), 2)
+        confirm(at, 0)
+        confirm(at, 1)
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "42")
+        transfer(pick_candidate(at, "P1-K2"), 2)                          # atkārtoti tas pats uz 2. moduli
+        self.assertEqual(sorted(at.session_state["ad_confirmations"]), [0])
+        self.assertTrue(any("NEPILNS APRĒĶINS (1 no 2" in w for w in warnings(at)))
+
+    def test_one_candidate_cannot_be_counted_in_two_modules(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(at, 2)                                                   # tas pats P1-K1 uz 2. moduli
+        self.assertTrue(any("BRĪDINĀJUMS" in w and "jau ir izvēlēts 1" in w for w in warnings(at)))
+        confirm(at, 0)
+        confirm(at, 1)
+        self.assertTrue(any("jau ir izmantots 1. modulī" in e and "bloķēta" in e for e in errors(at)))
+        self.assertEqual(metric(at, "Sijas moduļā (gab.)"), "21")          # tikai pirmais modulis
+        self.assertEqual([lab for lab, _ in metrics(at)].count("Sijas moduļā (gab.)"), 1)
+        self.assertTrue(any("NEPILNS APRĒĶINS (1 no 2" in w for w in warnings(at)))
+        labels = [lab for lab, _ in metrics(at)]
+        self.assertNotIn("Sijas kopā (gab.)", labels)                     # nav kopsummas
+        self.assertEqual(len(at.get("download_button")), 0)               # nav CSV
+
+    def test_duplicate_is_resolved_by_choosing_a_different_candidate_or_manual_source(self):
+        at = start_bytes(sample(self.S03))
+        at.number_input(key="ad_module_count").set_value(2).run()
+        transfer(pick_candidate(at, "P1-K1"), 1)
+        transfer(at, 2)
+        at.selectbox(key="ad_src_1").set_value("Ievadīts manuāli").run()   # apzināti manuāls modulis
+        enter(at, 1, 12000, 3600)
+        self.assertEqual(errors(at), [])
+        confirm(at, 0)
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "42")
+        self.assertFalse(any("NEPILNS" in w for w in warnings(at)))
+
+    def test_manually_corrected_values_mark_the_source_as_corrected(self):
+        at = transfer(start_bytes(sample(self.S01)))
+        at.number_input(key="ad_L_0").set_value(12100).run()
+        self.assertTrue(any("manuāli koriģēts" in w and "P2-K1" in w for w in warnings(at)))
+        confirm(at, 0)
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertIn("vektoru kandidāts P2-K1", source)
+        self.assertIn("MANUĀLI KORIĢĒTS", source)
+        self.assertIn("12100×4000", source)
+        self.assertIn("12000×4000", source)                                # kandidāta oriģinālā vērtība
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.20704 m³")    # aprēķins no ievadītā, ne no kandidāta
+
+    def test_unchanged_transferred_values_are_not_marked_as_corrected(self):
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertEqual(source, "PDF 2. lapa, vektoru kandidāts P2-K1")
+        self.assertFalse(any("manuāli koriģēts" in w for w in warnings(at)))
+
+    def test_transfer_warnings_do_not_call_the_status_proven(self):
+        at = start_bytes(sample(self.S01))
+        self.assertTrue(any("nenozīmē konstruktīvi pierādītu" in w for w in warnings(at)))      # arī saskaņotam
+        self.assertEqual({r["Statuss"] for r in vector_table(at)}, {"ģeometriski saskaņots"})
+        self.assertNotIn("pierādīts", {r["Statuss"] for r in vector_table(at)})
+        self.assertTrue(any("ģeometriski saskaņots" in c.value and "NEPIERĀDA" in c.value for c in at.caption))
+        unclear = start_bytes(sample("ad_vector_05_scale_missing.pdf"))
+        self.assertTrue(any("pierādījumu nepietiek" in w for w in warnings(unclear)))
+        self.assertFalse(any("nenozīmē konstruktīvi" in w for w in warnings(unclear)))
+
+    def test_changing_transferred_values_cancels_the_confirmation(self):
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        at.number_input(key="ad_L_0").set_value(12100).run()
+        self.assertEqual(metrics(at), [])
+        self.assertTrue(any("apstiprinājums atcelts" in w for w in warnings(at)))
+
+    def test_refused_candidates_cannot_be_transferred(self):
+        for name, issue in (("ad_vector_04_L_shape_unclear.pdf", "nav taisnstūris"),
+                            ("ad_vector_06_scale_conflict.pdf", "Mēroga pretruna")):
+            at = start_bytes(sample(name))
+            self.assertEqual(vector_table(at)[0]["Statuss"], "atteikums", name)
+            row = vector_table(at)[0]
+            self.assertTrue(pd.isna(row["L (mm)"]) and pd.isna(row["W (mm)"]), name)    # atteikums: L/W nav
+            self.assertTrue(at.button(key="ad_vec_transfer").disabled, name)
+            self.assertIn("L/W netiek piedāvāti", at.selectbox(key="ad_vec_pick").value)
+            self.assertIn(issue, " ".join(m.value for m in at.markdown), name)
+            self.assertEqual((at.number_input(key="ad_L_0").value, at.number_input(key="ad_W_0").value), (0, 0))
+            enter(at, 0, 12000, 4000)                                      # manuālā ievade paliek pieejama
+            self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³", name)
+
+    def test_unclear_candidates_are_transferable_with_a_warning(self):
+        for name in ("ad_vector_05_scale_missing.pdf", "ad_vector_09_facade_and_inner_contour.pdf"):
+            at = start_bytes(sample(name))
+            self.assertEqual({r["Statuss"] for r in vector_table(at)}, {"neskaidrs"}, name)
+            self.assertTrue(any("pierādījumu nepietiek" in w for w in warnings(at)), name)
+            transfer(at)
+            self.assertNotEqual(at.number_input(key="ad_L_0").value, 0, name)
+            self.assertEqual(metrics(at), [], name)                        # joprojām jāapstiprina
+
+    def test_pages_without_vectors_warn_and_manual_entry_works(self):
+        at = start_bytes(sample("ad_vector_08_no_vector_geometry.pdf"))
+        self.assertTrue(any("nav vektoru ģeometrijas" in w for w in warnings(at)))
+        self.assertEqual(vector_table(at), [])
+        self.assertEqual(len(at.get("image")), 0)
+        enter(at, 0, 12100, 4000)
+        self.assertEqual(metric(at, "Sijas kopā (gab.)"), "22")
+
+    def test_manual_entry_is_independent_of_candidates(self):
+        at = enter(start_bytes(sample(self.S01)), 0, 12100, 4000)         # nepiekrīt kandidātam 12000 × 4000
+        self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.20704 m³")
+        source = next(f.value.to_dict("records")[0]["Avots"] for f in at.dataframe if "Avots" in f.value.columns)
+        self.assertEqual(source, "Ievadīts manuāli")
+
+    def test_removing_the_pdf_clears_vector_data_and_cancels_confirmation(self):
+        at = confirm(transfer(start_bytes(sample(self.S01))), 0)
+        self.assertIn("vector", at.session_state["ad_scan"]["scan"])
+        at.file_uploader[0].set_value(None).run()
+        self.assertNotIn("ad_scan", at.session_state)
+        self.assertEqual(vector_table(at), [])
+        self.assertEqual(len(at.get("image")), 0)
+        self.assertEqual(metrics(at), [])                                  # PDF identitāte mainījusies
+
+    def test_replacing_the_pdf_replaces_the_candidates(self):
+        at = start_bytes(sample(self.S01))
+        at.file_uploader[0].upload("other.pdf", sample(self.S02), "application/pdf").run()
+        self.assertEqual([(r["Kandidāts"], r["L (mm)"], r["W (mm)"]) for r in vector_table(at)], [("P1-K1", 12100, 3600)])
+
+    def test_pd_mode_is_unaffected_by_vector_samples(self):
+        at = AppTest.from_file(APP, default_timeout=90).run()
+        at.radio[0].set_value(PD_MODE).run()
+        at.file_uploader[0].upload("sample.pdf", sample(self.S01), "application/pdf").run()
+        self.assertFalse(at.exception)
+        self.assertEqual(vector_table(at), [])
+        self.assertFalse({w.key for w in at.number_input if w.key and w.key.startswith("ad_")})
 
 
 class TestPDPathUnchanged(unittest.TestCase):
