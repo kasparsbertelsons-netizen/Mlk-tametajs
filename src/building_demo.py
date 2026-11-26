@@ -5,7 +5,7 @@ fasādē NETIEK skaitīta). Ārsienu garums = 2×(20+4) = 48 m, nevis moduļu pe
 Karkasa šķērsgriezumi, soļi, biezumi un cenas ir DEMONSTRĀCIJAS vērtības, nevis MLK receptes.
 """
 from src.building_estimate import (
-    G_ELEC, G_EQUIP, G_EXT, G_FASTEN, G_FINISH, G_FLOOR, G_INT, G_OPEN, G_PLUMB, G_ROOF, G_SANIT, G_VENT, default_layers, empty_project,
+    G_ELEC, G_EQUIP, G_EXT, G_FASTEN, G_FINISH, G_FLOOR, G_FURN, G_INT, G_MANUAL, G_OPEN, G_PLUMB, G_ROOF, G_SANIT, G_VENT, default_layers, empty_project,
     module_fp, set_price,
 )
 
@@ -180,4 +180,124 @@ def demo_project():
     p["pricing"] = {"overhead_pct": DEMO_OVERHEAD_PCT, "method": "markup", "markup_pct": DEMO_MARKUP_PCT, "margin_pct": None,
                     "vat_enabled": True, "vat_pct": DEMO_VAT_PCT}
     p["review"] = {"reviewer": "", "confirmed": False, "fp": None}
+    return p
+
+
+# --- AD-first DEMO (Issue #16): sintētisks AD PDF → apstiprināti kandidāti → tipu receptes → pilnībā cenota tāme -----------------------
+AD_DEMO_NAME = "DEMO AD — sintētiska CLT ēka (no sintētiska AD PDF)"
+AD_LAYER_ARTICLES = {   # slāņa nosaukums → (artikuls, mērvienība, cena EUR/vienība bez PVN) — DEMO, nav MLK dati
+    "fasādes dēlis": ("DEMO-FAS-DELIS", "m²", 34.0), "latojums": ("DEMO-LATA-50", "m", 1.4), "instalāciju latojums": ("DEMO-LATA-50", "m", 1.4),
+    "vēja plēve": ("DEMO-VEJA", "m²", 2.1), "siltinājums": ("DEMO-SILT-VATE", "m³", 95.0), "ģipškartons": ("DEMO-GKL-12", "m²", 6.0),
+    "ģipškartons abās pusēs": ("DEMO-GKL-12", "m²", 6.0), "skrūves": ("DEMO-SKR-6x80", "gab.", 0.12), "jumta segums": ("DEMO-SEGUMS", "m²", 29.0),
+    "membrāna": ("DEMO-MEMBR", "m²", 2.6)}
+AD_CATALOG_EXTRA = {   # artikuls → (nosaukums, vienība, cena, iepakojums)
+    "DEMO-CLT-100": ("CLT panelis 100 mm", "m³", 520.0, None), "DEMO-CLT-140": ("CLT panelis 140 mm", "m³", 560.0, None),
+    "DEMO-CLT-120": ("CLT panelis 120 mm", "m³", 540.0, None), "DEMO-CLT-80": ("CLT panelis 80 mm", "m²", 38.0, None),
+    "DEMO-LOGS": ("Logs 1200×1500", "gab.", 240.0, None), "DEMO-DURV-ARD": ("Ārdurvis 1000×2100", "gab.", 410.0, None),
+    "DEMO-DURV-IEK": ("Iekšdurvis 800×2100", "gab.", 95.0, None), "DEMO-JLOGS": ("Jumta logs 780×1400", "gab.", 390.0, None),
+    "DEMO-TERASE": ("Terases segums", "m²", 42.0, None), "DEMO-GRIDA-APD": ("Grīdas apdare", "m²", 21.0, None),
+    "DEMO-GRIESTI": ("Griestu apdare", "m²", 13.0, None), "DEMO-MEP-AP": ("MEP apakšuzņēmējs (darbs)", "kompl.", 4000.0, None),
+    "DEMO-KIT-VENT": ("Ventilācijas komplekts", "kompl.", 3200.0, None), "DEMO-KIT-PLUMB": ("Ūdens un kanalizācijas komplekts", "kompl.", 2400.0, None),
+    "DEMO-KIT-SANIT": ("Sanitārtehnikas komplekts", "kompl.", 1650.0, None), "DEMO-KIT-ENERG": ("Siltumsūknis un rekuperators (komplekts)", "kompl.", 9800.0, None),
+    "DEMO-KIT-VIRTUVE": ("Virtuves komplekts", "kompl.", 4200.0, None), "DEMO-KIT-MEBELES": ("Iebūvētās mēbeles", "kompl.", 1800.0, None),
+    "DEMO-LENTE": ("Hermetizācijas lente", "m", 1.9, None), "DEMO-LENSKAVA": ("Leņķskava", "gab.", 1.6, None),
+    "DEMO-EL-NORMA": ("Elektroinstalācijas materiāli (EUR uz m² grīdas)", "m²", 38.0, None),
+}
+AD_OPERATIONS = [   # (grupa, nosaukums, posms, pamats, normstundas, tiešās stundas, vienība)
+    (G_FLOOR, "Grīdas rāmja izgatavošana", "Karkasa ražošana", "floor_frame", 0.60, None, "m²"),
+    (G_EXT, "CLT ārsienu montāža un apstrāde", "Karkasa ražošana", "ext_net", 0.50, None, "m²"),
+    (G_INT, "CLT iekšsienu montāža", "Karkasa ražošana", "int_one", 0.40, None, "m²"),
+    (G_ROOF, "Jumta paneļu un seguma montāža", "Apdare un montāža", "roof", 0.45, None, "m²"),
+    (G_EXT, "Fasādes un iekšējās apdares darbi", "Apdare un montāža", "ext_net", 0.60, None, "m²"),
+    (G_OPEN, "Logu un durvju montāža", "Apdare un montāža", "win", 1.5, None, "gab."),
+    (G_VENT, "Ventilācijas montāža", "Apdare un montāža", "direct", None, 24.0, "h"),
+    (G_ELEC, "Elektroinstalācija", "Apdare un montāža", "direct", None, 60.0, "h"),
+    (G_PLUMB, "Ūdens un kanalizācijas montāža", "Apdare un montāža", "direct", None, 40.0, "h"),
+    (G_SANIT, "Sanitārtehnikas montāža", "Apdare un montāža", "direct", None, 16.0, "h"),
+]
+
+
+def demo_ad_project():
+    """AD-first DEMO: sintētisks AD PDF → kandidāti → apstiprināšana (visi ar pārliecību ≥ vidēja) → AD tipu receptes ar DEMO cenām →
+    pilnībā cenota tāme līdz pārdošanas cenai. AD stadija: MEP/virtuve/mēbeles/tehnika ir budžeta komplekti vai parametriskas normas ar pieņēmumu.
+    Visi skaitļi sintētiski; nekādi MLK dati vai normas."""
+    from src.ad_building import apply_candidates, scan_ad_building
+    from tools.synthetic_ad_building import build_ad_building_pdf
+    scan = scan_ad_building(build_ad_building_pdf())
+    p = empty_project(AD_DEMO_NAME, "clt")
+    p["is_demo"], p["stage"] = True, "AD"
+    apply_candidates(p, scan, [c.id for c in scan.candidates if c.confidence != "zema"], source_label="DEMO sintētisks AD PDF")
+    for m, name in zip(p["modules"], ("Modulis A", "Modulis B")):               # lietotājs pārdēvē moduļus (apstiprinājums paliek spēkā)
+        m["name"] = name
+    p["module_fp"] = {str(i): module_fp(m) for i, m in enumerate(p["modules"])}
+    demo = "DEMO sintētisks (nav MLK dati)"
+    p["clt"] = {
+        "ext": {"enabled": True, "thickness_mm": None, "thickness_confirmed": True, "price_unit": "m³", "waste_pct": 10.0, "article": None,
+                "articles": {"100": "DEMO-CLT-100", "140": "DEMO-CLT-140"}, "source": demo},
+        "int": {"enabled": True, "thickness_mm": None, "thickness_confirmed": True, "price_unit": "m²", "waste_pct": 10.0, "article": None,
+                "articles": {"80": "DEMO-CLT-80"}, "source": demo},
+        "roof": {"enabled": True, "thickness_mm": None, "thickness_confirmed": True, "price_unit": "m³", "waste_pct": 10.0, "article": None,
+                 "articles": {"120": "DEMO-CLT-120", "100": "DEMO-CLT-100"}, "source": demo},
+        "floor": {"enabled": False, "thickness_mm": None, "thickness_confirmed": False, "price_unit": "m²", "waste_pct": 10.0, "article": None,
+                  "source": ""}}
+    for tr in p["type_recipes"]:
+        if tr["kind"] == "CLT":
+            continue                                               # CLT biezumu dod tips; materiāla rindu veido CLT recepte
+        art, unit, _price = AD_LAYER_ARTICLES[tr["name"]]
+        tr["article"], tr["spec"], tr["source"] = art, "DEMO", demo
+        if tr["name"] == "skrūves":
+            tr["norm"] = 6.0                                       # DEMO norma: gab. uz m² (nav MLK norma)
+            tr["assumption"], tr["detail"] = "DEMO parametriska norma (nav MLK dati)", "norma"
+    for o in p["openings"]:
+        o["article"] = {"L1": "DEMO-LOGS", "D1": "DEMO-DURV-ARD", "D2": "DEMO-DURV-IEK", "JL1": "DEMO-JLOGS"}[o["name"]]
+    for t in p["terraces"]:
+        t["article"] = "DEMO-TERASE"
+    layers = default_layers("clt")
+    for layer in layers:
+        layer["source"] = demo
+        layer["article"] = {"Grīdas apdare": "DEMO-GRIDA-APD", "Griestu apdare": "DEMO-GRIESTI"}.get(layer["name"])
+    p["layers"] = [l for l in layers if l["name"] in ("Grīdas apdare", "Griestu apdare")]
+    for i, l in enumerate(p["layers"], 1):
+        l["id"] = f"demo-ad-layer-{i}"
+
+    def rec(group, name, art, qty, unit, *, driver="direct", norm=None, detail="komplekts", assumption="", scope="materiāli", waste=None):
+        return {"group": group, "article": art, "name": name, "spec": "DEMO", "unit": unit, "driver": driver, "norm": norm, "qty": qty,
+                "waste_pct": waste, "pack_size": None, "module": "", "stage": "", "approved": False, "source": demo, "enabled": True,
+                "detail": detail, "assumption": assumption, "cost_scope": scope}
+    p["recipes"] = [
+        rec(G_FASTEN, "Hermetizācijas lente savienojumiem (norma uz m ārsienu)", "DEMO-LENTE", None, "m", driver="ext_len", norm=3.0, detail="norma",
+            assumption="DEMO norma: m lentes uz m ārsienu garuma (nav MLK norma)"),
+        rec(G_FASTEN, "Leņķskavas (norma uz moduli)", "DEMO-LENSKAVA", None, "gab.", driver="modules", norm=40.0, detail="norma",
+            assumption="DEMO norma: gab. uz moduli (nav MLK norma)"),
+        rec(G_VENT, "Ventilācijas sistēma (AD budžeta komplekts)", "DEMO-KIT-VENT", 1, "kompl.", assumption="DEMO: rekuperācija visai ēkai; detalizācija PD stadijā"),
+        rec(G_ELEC, "Elektroinstalācijas materiāli (parametriska norma EUR/m²)", "DEMO-EL-NORMA", None, "m²", driver="floor_net", norm=1.0, detail="norma",
+            assumption="DEMO: budžeta norma uz m² neto grīdas; slēdži, kabeļi, sadalne ietverti"),
+        rec(G_PLUMB, "Ūdens un kanalizācijas komplekts (AD)", "DEMO-KIT-PLUMB", 1, "kompl.", assumption="DEMO: viena mitrā telpa un virtuve"),
+        rec(G_SANIT, "Sanitārtehnikas komplekts (AD)", "DEMO-KIT-SANIT", 1, "kompl.", assumption="DEMO: standarta komplekts, modelis nav izvēlēts"),
+        rec(G_EQUIP, "Siltumsūknis un rekuperators (AD komplekts)", "DEMO-KIT-ENERG", 1, "kompl.", assumption="DEMO: jauda nav aprēķināta; budžeta komplekts"),
+        rec(G_FURN, "Virtuves komplekts (AD)", "DEMO-KIT-VIRTUVE", 1, "kompl.", assumption="DEMO: tipveida virtuve ar tehniku"),
+        rec(G_FURN, "Iebūvētās mēbeles (AD)", "DEMO-KIT-MEBELES", 1, "kompl.", assumption="DEMO: garderobes un noliktava"),
+        rec(G_MANUAL, "MEP apakšuzņēmējs (darbs)", "DEMO-MEP-AP", 1, "kompl.", detail="komplekts", scope="ārpakalpojums",
+            assumption="DEMO: ārpakalpojums, nav dubultots ar darba operācijām (atsevišķa grupa)"),
+    ]
+    for i, r in enumerate(p["recipes"], 1):
+        r["id"] = f"demo-ad-recipe-{i}"
+    catalog = {}
+    for name, (art, unit, price) in AD_LAYER_ARTICLES.items():
+        catalog.setdefault(art, (name, unit, price, 200 if art == "DEMO-SKR-6x80" else None))
+    catalog.update(AD_CATALOG_EXTRA)
+    p["catalog"] = [{"article": a, "name": n + " (DEMO)", "spec": "DEMO", "unit": u, "unit_price": pr, "pack_size": pk, "supplier": DEMO_SUPPLIER,
+                     "source": demo} for a, (n, u, pr, pk) in catalog.items()]
+    p["prices"] = {}
+    set_price(p, "floor_frame:modulis a", DEMO_FLOOR_FRAME_EUR_M3, "m³")
+    set_price(p, "floor_frame:modulis b", DEMO_FLOOR_FRAME_EUR_M3, "m³")
+    set_price(p, "pir", DEMO_PIR_EUR_M2, "m²")
+    p["labour"] = {"rate_eur_h": DEMO_RATE_EUR_H, "operations": [
+        {"id": f"demo-ad-op-{i}", "group": g, "name": name, "stage": stage, "module": "", "driver": drv, "qty": None, "unit": unit,
+         "norm_h": norm, "hours": hours, "rate_eur_h": None, "approved": False, "source": demo, "enabled": True}
+        for i, (g, name, stage, drv, norm, hours, unit) in enumerate(AD_OPERATIONS, 1)]}
+    p["other_costs"] = [{"id": f"demo-ad-oc-{i}", "name": n, "category": c, "group": None, "amount_eur": a, "source": demo}
+                        for i, (n, c, a) in enumerate(DEMO_OTHER_COSTS, 1)]
+    p["pricing"] = {"overhead_pct": DEMO_OVERHEAD_PCT, "method": "markup", "markup_pct": DEMO_MARKUP_PCT, "margin_pct": None,
+                    "vat_enabled": True, "vat_pct": DEMO_VAT_PCT}
     return p

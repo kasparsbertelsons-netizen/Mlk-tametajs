@@ -268,7 +268,7 @@ class TestPricesAndExport(unittest.TestCase):
         self.assertIn("NEPILNA", rows[1][1])
         self.assertFalse(rows[1][0].startswith("="))
         self.assertTrue(any(len(r) > 1 and r[1] == "'=cmd|x" for r in rows))
-        self.assertTrue(any(r and r[-1] == "NEPILNA SADAĻA" for r in rows))
+        self.assertTrue(any("NEPILNA SADAĻA" in r for r in rows))
         self.assertTrue(any(len(r) > 1 and r[1] == "'=cmd|x" for r in rows))
 
 

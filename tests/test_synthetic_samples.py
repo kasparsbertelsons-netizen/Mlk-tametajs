@@ -58,7 +58,9 @@ class TestCommittedSamples(unittest.TestCase):
 
     def test_every_pdf_under_samples_is_marked_synthetic(self):
         found = list((ROOT / "samples").rglob("*.pdf"))
-        self.assertEqual(len(found), len(gen.SAMPLES))
+        from tools import synthetic_ad_building as building
+        expected = len(gen.SAMPLES) + len([n for n in building.SAMPLES if n.endswith(".pdf")])      # + AD ēkas paraugs (Issue #16)
+        self.assertEqual(len(found), expected)
         for path in found:
             with pymupdf.open(path) as doc:
                 self.assertIn("SYNTHETIC", doc.metadata["title"], path.name)
