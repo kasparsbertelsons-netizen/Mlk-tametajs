@@ -17,8 +17,9 @@ from src.building_estimate import (
 )
 from src.ad_pdf_ui import DEMO, STATUS_KEY, render_ad_import
 from src.building_demo import demo_ad_project
-from src.building_estimate import DETAIL_LEVELS, COST_SCOPES, TYPE_APPLIES, TYPE_KINDS
+from src.building_estimate import DETAIL_LEVELS, COST_SCOPES, ROOM_TYPES, TYPE_APPLIES, TYPE_KINDS
 from src.control_ui import render_control
+from src.library_ui import render_library
 from src.catalog_import import (
     apply_catalog, catalog_template_csv, catalog_template_xlsx, diff_catalog, parse_catalog_file,
 )
@@ -57,6 +58,21 @@ def _clear():
     st.session_state[KEY] = empty_project()
     st.session_state.pop(STATUS_KEY, None)
     st.session_state[VER] = st.session_state.get(VER, 0) + 1
+
+
+LIB_TAGS = ("lib_code", "lib_status", "lib_kind", "lib_kit")
+
+
+def _keep_lib_tags(old_lines, new_lines):
+    """Tabulas rediģēšana pārbūvē rindas tikai no redzamajām kolonnām: bibliotēkas atzīmes (lib_*) jāsaglabā pēc rindas id (citādi atkārtota piemērošana dublētu)."""
+    old = {str(x.get("id")): x for x in old_lines or [] if x.get("id")}
+    for rec in new_lines:
+        src = old.get(str(rec.get("id")))
+        if src:
+            for tag in LIB_TAGS:
+                if tag in src:
+                    rec[tag] = src[tag]
+    return new_lines
 
 
 def _clean(value):
@@ -179,6 +195,9 @@ def render_building_mode():
     stage = project.get("stage", "AD")
     st.caption(f"Projekta stadija: **{ {'AD': 'AD prognoze (sākotnējā)', 'PD': 'PD detalizācija (atvasināta kopija)', 'kalibrēta': 'Kalibrētā versija (atvasināta kopija)'}.get(stage, stage) }**. "
                "AD tāme tiek nodalīta no vēlākās PD detalizācijas un faktiskajiem datiem.")
+    with st.expander("0b. Bibliotēka: receptes, cenas, normstundas, AD komplektācija", expanded=False):
+        render_library(project, KEY, VER)
+
     with st.expander("1. Moduļi (grīdas rāmis — esošais kodols)", expanded=not project["modules"]):
         st.caption("Katrs modulis ir taisnstūris ar APSTIPRINĀTIEM L un W (mm). Atzīmē «Apstiprināts»; mainot L, W vai asis, "
                    "apstiprinājums tiek atcelts. Pastiprinājumu asis (nav obligāti): mm no moduļa gala, atdalītas ar atstarpi "
@@ -249,6 +268,15 @@ def render_building_mode():
                 "type": st.column_config.TextColumn("Konstr. tips (kods)"),
                 "clt_mm": st.column_config.NumberColumn("CLT biezums (mm), neobligāti", min_value=0.0)}
     WALL_COLS = ["name", "length_m", "height_mm", "type", "clt_mm"]
+    with st.expander("2c. Telpas un virtuves garums (draiveriem; nav obligāti)", expanded=False):
+        st.caption("Telpu skaits/tips un virtuves garums ir pamati bibliotēkas receptēm, normstundām un komplektiem. Tukšs = nav ievadīts (netiek izdomāts).")
+        _number("Virtuves garums (m)", project, ("kitchen_len_m",), step=0.1)
+        _table(project, "rooms", ["name", "type", "count"], {
+            "name": st.column_config.TextColumn("Telpa"),
+            "type": st.column_config.SelectboxColumn("Tips", options=list(ROOM_TYPES)),
+            "count": st.column_config.NumberColumn("Skaits", min_value=0, step=1)}, numeric=("count",),
+            help_text="Tips: " + ", ".join(f"{k} = {v}" for k, v in ROOM_TYPES.items()))
+
     with st.expander("3. Ārsienas (faktiskie garumi)", expanded=False):
         st.caption("Ievadi FAKTISKO ārējo sienu garumus. Kopīgās moduļu šuves NAV fasāde: neieraksti tās; programma salīdzina ar "
                    "moduļu perimetru.")
@@ -394,7 +422,7 @@ def render_building_mode():
         recs = _records(edited, boolean=("enabled", "approved"))
         for rec in recs:
             rec["driver"] = LABEL_TO_DRIVER.get(rec.get("driver"), rec.get("driver") or "direct")
-        project["recipes"] = recs
+        project["recipes"] = _keep_lib_tags(project.get("recipes"), recs)
 
     with st.expander("9. Materiālu katalogs un cenu imports (XLSX/CSV)", expanded=False):
         _catalog_section(project)
@@ -449,7 +477,7 @@ def render_building_mode():
         recs = _records(edited, boolean=("enabled", "approved"))
         for rec in recs:
             rec["driver"] = LABEL_TO_DRIVER.get(rec.get("driver"), rec.get("driver") or "direct")
-        labour["operations"] = recs
+        labour["operations"] = _keep_lib_tags(labour.get("operations"), recs)
 
     with st.expander("12. Citas izmaksas, pieskaitāmās, cenojums un PVN", expanded=False):
         st.caption("Manuālās izmaksas (ārpakalpojumi, transports, montāža) ir ATSEVIŠĶI no materiāliem un darba operācijām. Ārpakalpojums ar "

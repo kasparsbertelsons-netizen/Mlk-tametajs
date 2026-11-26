@@ -58,7 +58,8 @@ AD_ASSUMPTION_GROUPS = (G_VENT, G_ELEC, G_PLUMB, G_SANIT, G_EQUIP, G_FURN)
 TYPE_APPLIES = {"ext": G_EXT, "int": G_INT, "roof": G_ROOF}
 TYPE_KINDS = ["plāksne", "CLT", "latojums", "siltinājums", "membrāna", "apdare", "stiprinājums", "cits"]
 LABOUR_UNITS = ("h", "st.", "st", "stunda", "stundas", "darba stundas", "cilvēkstundas")
-LINE_LISTS = ("layers", "recipes", "manual", "openings", "terraces", "other_costs", "construction_types", "type_recipes", "roof_slopes", "gables")
+LINE_LISTS = ("layers", "recipes", "manual", "openings", "terraces", "other_costs", "construction_types", "type_recipes", "roof_slopes", "gables", "rooms")
+ROOM_TYPES = {"bed": "guļamistaba", "living": "dzīvojamā telpa", "kitchen": "virtuve", "wet": "mitrā telpa", "tech": "tehniskā telpa", "other": "cita telpa"}
 
 DEFAULT_WALL_HEIGHT_MM = 2700            # orientējošs, rediģējams
 DEFAULT_WASTE_PCT = 10.0                 # rezerve materiāliem; rediģējama, nošķirta no neto
@@ -143,6 +144,7 @@ def empty_project(name="Jauns projekts", construction="clt"):
         "module_fp": {},
         "stage": "AD", "layers_mode": "manual", "construction_types": [], "type_recipes": [], "roof_slopes": [], "gables": [],
         "versions": [], "actuals": None, "ad_import": None,
+        "rooms": [], "kitchen_len_m": None, "lib": {"name": None, "version": None, "kits": {}},          # Issue #20: telpu skaits/tips, virtuves garums, bibliotēkas komplektācijas izvēles
         "modules": [], "floor_net_m2": None, "ceiling_m2": None, "terraces": [],
         "wall_height_mm": DEFAULT_WALL_HEIGHT_MM, "ext_walls": [], "int_walls": [], "openings": [],
         "frames": {k: {"b_mm": None, "h_mm": None, "step_mm": None} for k in ("ext", "int", "roof")},
@@ -161,6 +163,11 @@ DRIVERS = {
     "roof": "m² jumts", "floor_net": "m² grīda neto", "floor_frame": "m² moduļu grīdas laukums", "ceiling": "m² griesti",
     "ext_len": "m ārsienu garums", "int_len": "m iekšsienu garums",
     "win": "gab. logi", "door": "gab. durvis", "modules": "gab. moduļi",
+    # Issue #20 (pievienoti tikai vajadzīgie; «win» saglabāts kā iepriekš = visi logi)
+    "ext_gross": "m² ārsienu bruto (ar atverēm)", "int_gross": "m² iekšsienu bruto (ar atverēm)", "roof_gross": "m² jumta bruto (ar jumta logiem)",
+    "facade_win": "gab. fasādes logi (ārsienās)", "roof_win": "gab. jumta logi",
+    "rooms": "gab. telpas (kopā)", **{f"rooms_{k}": f"gab. telpas: {v}" for k, v in ROOM_TYPES.items()},
+    "kitchen_len": "m virtuves garums (ja ievadīts)",
 }
 
 
@@ -1040,6 +1047,21 @@ def estimate(project: dict) -> Estimate:
                "floor_net": floor_net, "floor_frame": frame_area if confirmed else None, "ceiling": ceiling,
                "ext_len": wall_data["ext_walls"][1] or None, "int_len": wall_data["int_walls"][1] or None,
                "win": n_open("Logs") or None, "door": n_open("Durvis") or None, "modules": confirmed or None}
+    drivers.update({"ext_gross": wall_data["ext_walls"][2] or None, "int_gross": wall_data["int_walls"][2] or None, "roof_gross": roof_gross,
+                    "facade_win": sum(c for k, _l, _w, _h, c, wall in open_rows if k == "Logs" and wall == "Ārsiena") or None,
+                    "roof_win": sum(c for k, _l, _w, _h, c, wall in open_rows if k == "Logs" and wall == "Jumts") or None})
+    room_counts = {key: 0 for key in ROOM_TYPES}
+    for ri, room in enumerate(project.get("rooms") or [], 1):
+        try:
+            rc = num(room.get("count"))
+        except ValueError as error:
+            est.errors.append(f"Telpas: rinda {ri}: {error}")
+            continue
+        if rc is not None and rc == int(rc) and room.get("type") in ROOM_TYPES:
+            room_counts[room["type"]] += int(rc)
+    drivers["rooms"] = sum(room_counts.values()) or None
+    drivers.update({f"rooms_{k}": v or None for k, v in room_counts.items()})
+    drivers["kitchen_len"] = (_safe(est, "Virtuve", lambda: num(project.get("kitchen_len_m")), None)) or None
     for i, line in enumerate(project.get("recipes") or [], 1):
         if line.get("enabled") is False:
             continue
@@ -1087,6 +1109,16 @@ def estimate(project: dict) -> Estimate:
             continue
         add(group, name, value * norm, unit, f"{DRIVERS[driver]} {value:g} × norma {norm:g} {unit} uz vienību", source, status,
             waste, pieces=(unit == "gab."), **extra)
+
+    # ---------------- bibliotēkas receptes nedrīkst dubultot konstrukciju slāņus (Issue #20) ----------------
+    structural = [r for r in est.rows if r.group in LAYER_GROUPS and r.status != ST_DUP and r.row_id.split(":", 1)[0].split("~", 1)[0] in ("layer", "typerecipe")]
+    lib_ids = {f"recipe:{ln.get('id')}" for ln in project.get("recipes") or [] if ln.get("lib_code") and ln.get("enabled") is not False and ln.get("id")}
+    for r in est.rows:
+        if r.row_id in lib_ids and r.group in LAYER_GROUPS:
+            twin = next((x for x in structural if x.group == r.group and ((r.article and x.article == r.article) or norm_name(x.material) == norm_name(r.material))), None)
+            if twin is not None:
+                est.errors.append(f"Dubultošana: bibliotēkas recepte «{r.material}» ({r.group}) sakrīt ar konstrukcijas slāni «{twin.material}». "
+                                  "Atstāj vienu (noņem bibliotēkas recepti vai slāni).")
 
     if len(est.rows) > MAX_ROWS:
         est.errors.append(f"Pārāk daudz tāmes rindu (maks. {MAX_ROWS}).")
