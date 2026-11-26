@@ -3,26 +3,29 @@ from src.pdf_reader import read_pdf
 from src.estimate import Wall, calculate_wall
 from src.ad_ui import render_ad_mode
 from src.building_ui import render_building_mode
+from src.app_shell import MODE_BUILDING, MODE_OLD_AD, MODE_PD, MODES, version_label
 
 st.set_page_config(page_title="MLK Tāmēšanas Aģents", page_icon="🏠", layout="wide")
 st.title("MLK Tāmēšanas Aģents")
-st.caption("1. posms — rāmja norāžu nolasīšana no PDF")
+st.caption(version_label())
 
 import csv
 import io
 import fitz
 
-st.subheader("Arhitektūras rasējums → provizoriska grīdas rāmja tāme")
-st.caption("Rebel tipa moduļiem. Šis ir cenu piedāvājuma aprēķins, nevis konstruktora projekts.")
-mode = st.radio("Aprēķina režīms", ["AD — prognozēt rāmi", "PD — nolasīt specifikāciju", "Pilnas ēkas tāme"], horizontal=True)
+mode = st.radio("Aprēķina režīms", MODES, horizontal=True)
 
-if mode == "AD — prognozēt rāmi":
-    render_ad_mode()
-
-elif mode == "Pilnas ēkas tāme":
+if mode == MODE_BUILDING:
     render_building_mode()
 
+elif mode == MODE_OLD_AD:
+    st.subheader("Arhitektūras rasējums → provizoriska grīdas rāmja tāme")
+    st.caption("Vecais režīms: tikai grīdas rāmis (Rebel tipa moduļiem). Šis ir cenu piedāvājuma aprēķins, nevis konstruktora projekts.")
+    render_ad_mode()
+
 else:
+    st.subheader("PD: līmsiju specifikācijas nolasīšana no PDF")
+    st.caption("1. posma režīms: rāmja norāžu nolasīšana no PDF.")
     pdf = st.file_uploader("Augšupielādē rasējumu PDF", type=["pdf"], help="PDF tiek analizēts šajā sesijā; programma to neievieto GitHub.")
     if pdf:
         if pdf.size > 30 * 1024 * 1024:
@@ -87,22 +90,23 @@ else:
             except (ValueError, RuntimeError, Exception) as error:
                 st.error(f"PDF neizdevās analizēt: {error}")
     
-with st.expander("Iepriekšējais sienas demonstrācijas kalkulators"):
-    with st.form("wall"):
-        length = st.number_input("Sienas garums (m)", min_value=0.01, value=6.0)
-        height = st.number_input("Sienas augstums (m)", min_value=0.01, value=2.8)
-        openings = st.number_input("Ailu kopējais laukums (m²)", min_value=0.0, value=2.0)
-        spacing = st.number_input("Statņu solis (m)", min_value=0.01, value=0.5)
-        depth = st.number_input("Izolācijas biezums (m)", min_value=0.01, value=0.2)
-        confirmed = st.checkbox("Apstiprinu ievadītos izmērus")
-        submit = st.form_submit_button("Aprēķināt")
-    if submit:
-        if not confirmed:
-            st.error("Vispirms apstiprini ievadītos izmērus.")
-        else:
-            try:
-                result = calculate_wall(Wall(length, height, openings, spacing, depth))
-                st.json(result)
-                st.warning("Aptuvens aprēķins; nav konstruktora specifikācija.")
-            except ValueError as error:
-                st.error(str(error))
+if mode != MODE_BUILDING:
+    with st.expander("Iepriekšējais sienas demonstrācijas kalkulators"):
+        with st.form("wall"):
+            length = st.number_input("Sienas garums (m)", min_value=0.01, value=6.0)
+            height = st.number_input("Sienas augstums (m)", min_value=0.01, value=2.8)
+            openings = st.number_input("Ailu kopējais laukums (m²)", min_value=0.0, value=2.0)
+            spacing = st.number_input("Statņu solis (m)", min_value=0.01, value=0.5)
+            depth = st.number_input("Izolācijas biezums (m)", min_value=0.01, value=0.2)
+            confirmed = st.checkbox("Apstiprinu ievadītos izmērus")
+            submit = st.form_submit_button("Aprēķināt")
+        if submit:
+            if not confirmed:
+                st.error("Vispirms apstiprini ievadītos izmērus.")
+            else:
+                try:
+                    result = calculate_wall(Wall(length, height, openings, spacing, depth))
+                    st.json(result)
+                    st.warning("Aptuvens aprēķins; nav konstruktora specifikācija.")
+                except ValueError as error:
+                    st.error(str(error))

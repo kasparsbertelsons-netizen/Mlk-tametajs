@@ -422,7 +422,7 @@ class TestIdenticalModules(unittest.TestCase):
         from streamlit.testing.v1 import AppTest
         app = str(Path(__file__).resolve().parent.parent / "app.py")
         at = AppTest.from_file(app, default_timeout=120).run()
-        at.radio[0].set_value("Pilnas ēkas tāme").run()
+        at.radio[0].set_value("Pilnas ēkas AD tāme").run()
         at.file_uploader(key="bp_adpdf").upload("m.pdf", self.pdf, "application/pdf").run()
         at.button(key="bp_adsafe_0").click().run()
         at.button(key="bp_adapply_0").click().run()

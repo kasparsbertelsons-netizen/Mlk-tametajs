@@ -15,7 +15,7 @@ APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 def building_app():
     at = AppTest.from_file(APP, default_timeout=120).run()
-    at.radio[0].set_value("Pilnas ēkas tāme").run()
+    at.radio[0].set_value("Pilnas ēkas AD tāme").run()
     assert not at.exception, at.exception
     return at
 
@@ -65,7 +65,7 @@ class TestAdPdfFlow(unittest.TestCase):
         at = building_app()
         at.file_uploader(key="bp_adpdf").upload("bad.pdf", b"nav pdf", "application/pdf").run()
         self.assertFalse(at.exception)
-        self.assertTrue(any("neizdevās nolasīt" in e.value for e in at.error))
+        self.assertTrue(any("analīze neizdevās" in e.value for e in at.error))
 
     def test_pdf_is_not_stored_in_project(self):
         at = upload_ad_pdf(building_app())

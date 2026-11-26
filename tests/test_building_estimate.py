@@ -275,7 +275,7 @@ class TestPricesAndExport(unittest.TestCase):
 # ---- UI ---------------------------------------------------------------------------------------------------------
 def building_app():
     at = AppTest.from_file(APP, default_timeout=90).run()
-    at.radio[0].set_value("Pilnas ēkas tāme").run()
+    at.radio[0].set_value("Pilnas ēkas AD tāme").run()
     return at
 
 
@@ -283,7 +283,7 @@ class TestUi(unittest.TestCase):
     def test_modes_preserved(self):
         at = AppTest.from_file(APP, default_timeout=60).run()
         self.assertEqual(list(at.radio[0].options),
-                         ["AD — prognozēt rāmi", "PD — nolasīt specifikāciju", "Pilnas ēkas tāme"])
+                         ["Pilnas ēkas AD tāme", "Vecais AD: tikai grīdas rāmis", "PD: līmsiju specifikācija"])
 
     def test_empty_view_warns_incomplete(self):
         at = building_app()

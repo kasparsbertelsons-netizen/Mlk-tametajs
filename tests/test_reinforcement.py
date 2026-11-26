@@ -22,6 +22,14 @@ from src.reinforcement import ReinforcementError, parse_axis
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
+
+def legacy_app(timeout=60):
+    """Vecais AD grīdas rāmja režīms (Issue #18: noklusējums tagad ir pilnas ēkas AD tāme)."""
+    at = AppTest.from_file(APP, default_timeout=timeout).run()
+    at.radio[0].set_value("Vecais AD: tikai grīdas rāmis").run()
+    return at
+
+
 def calc(axes=(), length=12000, width=4000, **kw):
     return calculate_module(length, width, name="T", reinforcements=axes, **kw)
 
@@ -152,7 +160,7 @@ class TestDiagramMatchesCalc(unittest.TestCase):
 
 # ---- UI (AppTest) ---------------------------------------------------------------------------
 def app(L=12000, W=4000, axes=None, confirm_rf=True):
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = legacy_app(60)
     at.number_input(key="ad_L_0").set_value(L).run()
     at.number_input(key="ad_W_0").set_value(W).run()
     at.button(key="ad_confirm_0").click().run()

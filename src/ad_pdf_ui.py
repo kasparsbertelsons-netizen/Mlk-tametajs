@@ -12,34 +12,69 @@ from src.ad_building import HIGH, KIND_LABELS, LOW, MEDIUM, apply_candidates, sc
 from src.ad_vector import render_preview_png
 from src.project_io import LOCAL_DATA_REMINDER
 
+STATUS_KEY = "bp_ad_status"                  # sesijā: pēdējā AD sākumskata darbība ("demo" | "applied" | None)
 SAFE_KEY = "bp_ad_safe"
 SCAN_KEY = "bp_ad_scan"                      # sesijā: (pdf kontrolsumma, BuildingScan, pdf baiti priekšskatījumam); dzēšams
 
 
-def render_ad_import(project, ver, key_project, key_ver):
-    st.caption("AD arhitektūras PDF ir sākotnējā piedāvājuma vienīgais projektēšanas dokuments. Programma atrod KANDIDĀTUS (moduļi, telpas, sienu posmi, "
-               "zelmiņi, atveres, jumta slīpnes, konstrukciju tipi un slāņi) ar lappusi, avotu un pārliecību; tāmē nonāk tikai tas, ko APSTIPRINI. "
-               "Nenolasīts lauks paliek tukšs (nav nulle) un jāievada manuāli. Ārējā fasādes kontūra netiek sajaukta ar pamatrāmi. Notācija: "
-               "`docs/AD_BUILDING_IMPORT.md`.")
-    st.warning(LOCAL_DATA_REMINDER)
+WAITING, ANALYSING, RESULT, ERROR, NOTHING, DEMO, APPLIED = "waiting", "analysing", "result", "error", "nothing", "demo", "applied"
+
+
+def ad_status(state, candidates=0, error=None):
+    """Tīra funkcija: (līmenis, statusa teksts, nākamā darbība) AD sākumskata statusa panelim. Līmenis: info/success/error/warning."""
+    if state == ANALYSING:
+        return "info", "Notiek PDF analīze…", "Uzgaidi — rezultāts parādīsies šeit."
+    if state == RESULT:
+        return "success", f"Analīze pabeigta: atrasti {candidates} kandidāti.", \
+            "Atzīmē kandidātus, kurus apstiprini (vai «Atzīmēt visus droši nolasāmos»), un spied «Pārnest apstiprinātos uz tāmi»."
+    if state == ERROR:
+        return "error", f"PDF analīze neizdevās: {error}", "Pārbaudi, vai fails ir derīgs PDF (līdz 30 MB), un augšupielādē vēlreiz vai ielādē demonstrāciju."
+    if state == NOTHING:
+        return "warning", "Analīze pabeigta, bet nekas netika atpazīts (0 kandidātu).", \
+            "Iespējams, rasējums ir attēls vai neatbilst notācijai. Ievadi datus manuāli zemāk vai ielādē AD demonstrāciju."
+    if state == DEMO:
+        return "success", "AD demonstrācija ielādēta (sintētiski dati).", "Skati tāmes rezultātu zemāk — ritini uz leju pie «Tāmes rezultāts»."
+    if state == APPLIED:
+        return "success", "Apstiprinātie kandidāti pārnesti uz tāmi.", "Skati tāmes rezultātu zemāk un papildini trūkstošos datus."
+    return "info", "Gaida AD PDF.", "Augšupielādē AD arhitektūras PDF vai spied «Ielādēt AD demonstrāciju»."
+
+
+def show_status(box, state, candidates=0, error=None):
+    level, text, nxt = ad_status(state, candidates, error)
+    with box:
+        getattr(st, level)(f"**Statuss:** {text}\n\n**Nākamā darbība:** {nxt}")
+
+
+def render_ad_import(project, ver, key_project, key_ver, status_box=None):
     upload = st.file_uploader("AD arhitektūras PDF (sintētisks paraugs: samples/ad_building/)", type=["pdf"], key="bp_adpdf")                   # fiksēta atslēga: PDF paliek pēc pārnešanas
+    status_box = status_box if status_box is not None else st.container()          # FIKSĒTS konteiners tieši zem augšupielādes lauka
+    with st.expander("Par AD PDF analīzi un datu drošību"):
+        st.caption("AD arhitektūras PDF ir sākotnējā piedāvājuma vienīgais projektēšanas dokuments. Programma atrod KANDIDĀTUS (moduļi, telpas, sienu posmi, "
+                   "zelmiņi, atveres, jumta slīpnes, konstrukciju tipi un slāņi) ar lappusi, avotu un pārliecību; tāmē nonāk tikai tas, ko APSTIPRINI. "
+                   "Nenolasīts lauks paliek tukšs (nav nulle) un jāievada manuāli. Ārējā fasādes kontūra netiek sajaukta ar pamatrāmi. Notācija: "
+                   "`docs/AD_BUILDING_IMPORT.md`.")
+        st.warning(LOCAL_DATA_REMINDER)
     if upload is None:
         st.session_state.pop(SCAN_KEY, None)                # PDF noņemts → sesijas dati dzēsti
         st.session_state.pop(SAFE_KEY, None)
+        show_status(status_box, st.session_state.get(STATUS_KEY) or WAITING)
         _provenance(project)
         return
     data = upload.getvalue()
     digest = hashlib.sha256(data).hexdigest()
     cached = st.session_state.get(SCAN_KEY)
     if cached is None or cached[0] != digest:
+        show_status(status_box, ANALYSING)
         try:
-            scan = scan_ad_building(data)
+            with st.spinner("Notiek PDF analīze…"):
+                scan = scan_ad_building(data)
         except (ValueError, RuntimeError) as error:
-            st.error(f"PDF neizdevās nolasīt: {error}")
+            show_status(status_box, ERROR, error=error)
             st.session_state.pop(SCAN_KEY, None)
             return
         st.session_state[SCAN_KEY] = (digest, scan, data)
     _digest, scan, pdf_bytes = st.session_state[SCAN_KEY]
+    show_status(status_box, RESULT if scan.candidates else NOTHING, len(scan.candidates))
     st.write(f"Lapas: {len(scan.pages)}; kandidāti: **{len(scan.candidates)}**. " + ", ".join(f"lpp. {p['page']} — {p['kind']}" for p in scan.pages))
     for note in scan.notes:
         st.info(note)
@@ -70,6 +105,7 @@ def render_ad_import(project, ver, key_project, key_ver):
     if st.button("Pārnest apstiprinātos uz tāmi", key=f"bp_adapply_{ver}", disabled=not accepted):
         report = apply_candidates(project, scan, accepted, mode="add" if mode.startswith("Pievienot") else "replace", ceiling_as_floor=ceiling,
                                   use_type_recipes=types)
+        st.session_state[STATUS_KEY] = APPLIED
         st.session_state["bp_notice"] = (f"Pārnesti {len(report.applied)} kandidāti. Izlaisti {len(report.skipped)}: "
                                          + "; ".join(f"{i} ({why})" for i, why in report.skipped[:12])
                                          + ((" | PĀRBAUDI: " + " ".join(report.notes)) if report.notes else ""))

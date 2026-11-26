@@ -15,7 +15,7 @@ from src.building_estimate import (
     BASES, COST_CATEGORIES, CONSTRUCTIONS, DRIVERS, GROUPS, LAYER_GROUPS, LINE_LISTS, MANUAL_GROUPS, NOT_FINAL, STAGE_NOTE, ST_DUP,
     UNITS, confirm_review, default_layers, empty_project, ensure_ids, estimate, export_rows, module_fp, project_fingerprint,
 )
-from src.ad_pdf_ui import render_ad_import
+from src.ad_pdf_ui import DEMO, STATUS_KEY, render_ad_import
 from src.building_demo import demo_ad_project
 from src.building_estimate import DETAIL_LEVELS, COST_SCOPES, TYPE_APPLIES, TYPE_KINDS
 from src.control_ui import render_control
@@ -43,16 +43,19 @@ def _project():
 
 def _load_demo():
     st.session_state[KEY] = demo_project()
+    st.session_state.pop(STATUS_KEY, None)
     st.session_state[VER] = st.session_state.get(VER, 0) + 1
 
 
 def _load_ad_demo():
     st.session_state[KEY] = demo_ad_project()
+    st.session_state[STATUS_KEY] = DEMO
     st.session_state[VER] = st.session_state.get(VER, 0) + 1
 
 
 def _clear():
     st.session_state[KEY] = empty_project()
+    st.session_state.pop(STATUS_KEY, None)
     st.session_state[VER] = st.session_state.get(VER, 0) + 1
 
 
@@ -139,14 +142,17 @@ def _sync_module_confirmations(project):
 def render_building_mode():
     project = _project()
     ver = st.session_state.get(VER, 0)
-    st.info("**Pilnas ēkas PROVIZORISKA materiālu tāme.** Ievadi apstiprinātus izmērus vai ielādē sintētisku demonstrāciju. "
-            "Programma neizdomā trūkstošus izmērus, MLK receptes, cenas vai normstundas. " + NOT_FINAL + ".")
+    st.markdown("### Sākt: AD PDF vai demonstrācija")
+    st.button("Ielādēt AD demonstrāciju (sintētisks AD PDF)", key="bp_demo_ad", on_click=_load_ad_demo, use_container_width=True, type="primary",
+              help="Sintētisks AD PDF → apstiprināti kandidāti → AD tipu receptes → pilnībā cenota tāme. Nav reāls MLK projekts.")
+    render_ad_import(project, ver, KEY, VER)     # augšupielāde + FIKSĒTS statusa konteiners (gaida / analīze / rezultāts / kļūda / nekas neatpazīts) + nākamā darbība
+    st.markdown("**Citi sākuma varianti**")
     c1, c2 = st.columns(2)
-    c1.button("Ielādēt demonstrācijas projektu", key="bp_demo", on_click=_load_demo, use_container_width=True,
+    c1.button("Ielādēt CLT demonstrāciju", key="bp_demo", on_click=_load_demo, use_container_width=True,
               help="Sintētisks projekts: nav reāls MLK projekts, cenas vai rasējumi.")
     c2.button("Notīrīt projektu", key="bp_clear", on_click=_clear, use_container_width=True)
-    st.button("Ielādēt AD demonstrāciju (no sintētiska AD PDF)", key="bp_demo_ad", on_click=_load_ad_demo, use_container_width=True,
-              help="Sintētisks AD PDF → apstiprināti kandidāti → AD tipu receptes → pilnībā cenota tāme.")
+    st.info("**Pilnas ēkas PROVIZORISKA materiālu tāme (AD).** Programma neizdomā trūkstošus izmērus, MLK receptes, cenas vai normstundas. "
+            + NOT_FINAL + ".")
     notice_box = st.container()                  # FIKSĒTS konteiners: pārejoši paziņojumi nedrīkst nobīdīt sadaļas (citādi izvēršamās sadaļas aizveras)
     with notice_box:
         if st.session_state.get("bp_notice"):
@@ -173,9 +179,6 @@ def render_building_mode():
     stage = project.get("stage", "AD")
     st.caption(f"Projekta stadija: **{ {'AD': 'AD prognoze (sākotnējā)', 'PD': 'PD detalizācija (atvasināta kopija)', 'kalibrēta': 'Kalibrētā versija (atvasināta kopija)'}.get(stage, stage) }**. "
                "AD tāme tiek nodalīta no vēlākās PD detalizācijas un faktiskajiem datiem.")
-    with st.expander("0. AD PDF → tāmes ievaddati (kandidāti ar apstiprināšanu)", expanded=False):
-        render_ad_import(project, ver, KEY, VER)
-
     with st.expander("1. Moduļi (grīdas rāmis — esošais kodols)", expanded=not project["modules"]):
         st.caption("Katrs modulis ir taisnstūris ar APSTIPRINĀTIEM L un W (mm). Atzīmē «Apstiprināts»; mainot L, W vai asis, "
                    "apstiprinājums tiek atcelts. Pastiprinājumu asis (nav obligāti): mm no moduļa gala, atdalītas ar atstarpi "
