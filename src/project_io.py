@@ -69,7 +69,7 @@ def _walk(value, path, errors, depth=0):
 
 def _type_ok(default, value):
     if default is None:
-        return value is None or isinstance(value, (int, float, str)) and not isinstance(value, bool)
+        return value is None or isinstance(value, (int, float, str, dict, list)) and not isinstance(value, bool)
     if isinstance(default, bool):
         return isinstance(value, bool)
     if isinstance(default, (int, float)):
@@ -167,3 +167,8 @@ def _drop_approvals(project):
             panel["thickness_confirmed"] = False
     if isinstance(project.get("roof"), dict):
         project["roof"]["slope_confirmed"] = False
+    for sl in project.get("roof_slopes", []):
+        sl["confirmed"] = False
+    for key in ("type_recipes", "construction_types"):
+        for line in project.get(key, []):
+            line["approved"] = False

@@ -30,8 +30,9 @@ G_ROOF, G_OPEN, G_FINISH = "Jumts", "Logi un durvis", "Iekšējā apdare"
 G_FASTEN, G_VENT = "Stiprinājumi un palīgmateriāli", "Ventilācija"
 G_ELEC, G_PLUMB = "Elektroinstalācija", "Ūdens un kanalizācija"
 G_SANIT, G_EQUIP = "Sanitārtehnika", "Iekārtas un kondicionēšana"
+G_FURN = "Virtuve, mēbeles un tehnika"
 G_TERRACE, G_MANUAL = "Terases (ārpus iekštelpu platības)", "Manuālās rindas"
-GROUPS = [G_FLOOR, G_EXT, G_INT, G_ROOF, G_OPEN, G_FINISH, G_FASTEN, G_VENT, G_ELEC, G_PLUMB, G_SANIT, G_EQUIP, G_TERRACE, G_MANUAL]
+GROUPS = [G_FLOOR, G_EXT, G_INT, G_ROOF, G_OPEN, G_FINISH, G_FASTEN, G_VENT, G_ELEC, G_PLUMB, G_SANIT, G_EQUIP, G_FURN, G_TERRACE, G_MANUAL]
 LAYER_GROUPS = [G_FLOOR, G_EXT, G_INT, G_ROOF, G_FINISH]
 MANUAL_GROUPS = [g for g in GROUPS if g != G_TERRACE]
 # Obligātās BOM grupas: grupa bez neviena ieraksta tiek rādīta kā «NAV IEVADĪTS» (nezināms nav nulle)
@@ -50,9 +51,14 @@ ST_UNAPPROVED = "ievadīts (nav apstiprināts)"
 ST_NO_RATE = "nav likmes"
 COST_CATEGORIES = ["Ārpakalpojumi", "Transports", "Montāža", "Cits"]
 # Pēc noklusējuma 0% rezerve: iekārtām, logiem/durvīm, sanitārtehnikai (Issue #14); pārējiem materiāliem — rediģējams 10%
-ZERO_WASTE_GROUPS = (G_OPEN, G_SANIT, G_EQUIP)
+ZERO_WASTE_GROUPS = (G_OPEN, G_SANIT, G_EQUIP, G_FURN)
+DETAIL_LEVELS = ["detalizēts", "norma", "komplekts"]          # AD stadijā MEP/virtuve/mēbeles/tehnika: komplekts vai parametriska norma
+COST_SCOPES = ["materiāli", "materiāli+montāža", "ārpakalpojums"]
+AD_ASSUMPTION_GROUPS = (G_VENT, G_ELEC, G_PLUMB, G_SANIT, G_EQUIP, G_FURN)
+TYPE_APPLIES = {"ext": G_EXT, "int": G_INT, "roof": G_ROOF}
+TYPE_KINDS = ["plāksne", "CLT", "latojums", "siltinājums", "membrāna", "apdare", "stiprinājums", "cits"]
 LABOUR_UNITS = ("h", "st.", "st", "stunda", "stundas", "darba stundas", "cilvēkstundas")
-LINE_LISTS = ("layers", "recipes", "manual", "openings", "terraces", "other_costs")
+LINE_LISTS = ("layers", "recipes", "manual", "openings", "terraces", "other_costs", "construction_types", "type_recipes", "roof_slopes", "gables")
 
 DEFAULT_WALL_HEIGHT_MM = 2700            # orientējošs, rediģējams
 DEFAULT_WASTE_PCT = 10.0                 # rezerve materiāliem; rediģējama, nošķirta no neto
@@ -70,7 +76,8 @@ BASES = {
     "int_one": "Iekšsienu neto laukums (viena puse)",
     "int_both": "Iekšsienu neto laukums (abas puses)",
     "ceiling": "Griestu platība (ievadīta)",
-    "roof": "Jumta seguma platība",
+    "roof": "Jumta seguma platība (neto, bez jumta logiem)",
+    "roof_gross": "Jumta bruto laukums (ar jumta logiem)",
 }
 UNITS = ["m²", "m³", "m"]               # m³ = laukums × biezums; m = laukums / solis (piem. latojums)
 
@@ -134,6 +141,8 @@ def empty_project(name="Jauns projekts", construction="clt"):
         "other_costs": default_other_costs(), "review": {"reviewer": "", "confirmed": False, "fp": None},
         "labour": default_labour(), "pricing": default_pricing(), "is_demo": False,
         "module_fp": {},
+        "stage": "AD", "layers_mode": "manual", "construction_types": [], "type_recipes": [], "roof_slopes": [], "gables": [],
+        "versions": [], "actuals": None, "ad_import": None,
         "modules": [], "floor_net_m2": None, "ceiling_m2": None, "terraces": [],
         "wall_height_mm": DEFAULT_WALL_HEIGHT_MM, "ext_walls": [], "int_walls": [], "openings": [],
         "frames": {k: {"b_mm": None, "h_mm": None, "step_mm": None} for k in ("ext", "int", "roof")},
@@ -211,7 +220,7 @@ def ensure_ids(project):
 
 def project_fingerprint(project) -> str:
     """Pirkstu nospiedums visiem projekta datiem, izņemot pārbaudes apstiprinājumu: jebkura datu izmaiņa to maina."""
-    data = {k: v for k, v in project.items() if k != "review"}
+    data = {k: v for k, v in project.items() if k not in ("review", "versions", "actuals", "ad_import")}
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")).hexdigest()[:20]
 
 
@@ -255,6 +264,9 @@ class Row:
     vol_net: object = None       # koksnes apjoms m³ (neto) kopsavilkumam
     vol_order: object = None
     row_id: str = ""             # STABILA rindas identitāte (cenu atslēga); nav atkarīga no nosaukuma teksta
+    detail: str = ""             # detalizācijas līmenis: detalizēts / norma / komplekts (AD stadijā MEP, virtuve u.c.)
+    assumption: str = ""         # AD pieņēmums (obligāts komplektiem un parametriskām normām)
+    cost_scope: str = "materiāli"  # izmaksu segums: materiāli / materiāli+montāža / ārpakalpojums
 
     @property
     def cost(self):
@@ -536,7 +548,9 @@ def estimate(project: dict) -> Estimate:
         est.warnings.append(f"Neto grīdas platība {floor_net:g} m² pārsniedz moduļu laukumu {frame_area:g} m²: pārbaudi ievadi.")
 
     # ---------------- atveres ----------------
-    open_area = {"Ārsiena": 0.0, "Iekšsiena": 0.0}
+    open_area = {"Ārsiena": 0.0, "Iekšsiena": 0.0, "Jumts": 0.0}
+    open_assigned = {"Ārsiena": {}, "Iekšsiena": {}, "Jumts": {}}        # atvere → konkrēts posms/slīpne (neobligāti)
+    open_seen = set()
     open_rows, open_meta = [], []
     for i, o in enumerate(project.get("openings") or [], 1):
         label = str(o.get("name") or f"Atvere {i}").strip()
@@ -552,22 +566,34 @@ def estimate(project: dict) -> Estimate:
         if cnt != int(cnt):
             est.errors.append(f"{G_OPEN}: {label}: skaitam jābūt veselam.")
             continue
+        dup_key = (norm_name(label), int(w), int(h), wall, norm_name(o.get("segment")))
+        if dup_key in open_seen:
+            est.warnings.append(f"Atvere «{label}» {int(w)}×{int(h)} mm ({wall.lower()}) atkārtojas: dublikāts netiek skaitīts "
+                                "(viena atvere netiek atskaitīta divreiz).")
+            continue
+        open_seen.add(dup_key)
         open_area[wall] += w * h * cnt / 1e6
+        seg_name = str(o.get("segment") or "").strip()
+        if seg_name:
+            open_assigned[wall][seg_name] = open_assigned[wall].get(seg_name, 0.0) + w * h * cnt / 1e6
         open_rows.append((o.get("kind") or "Logs", label, int(w), int(h), int(cnt), wall))
         open_meta.append((line_id("opening", o, label), str(o.get("article") or "").strip() or None, str(o.get("spec") or "")))
     for (kind, label, w, h, cnt, wall), (oid, oart, ospec) in zip(open_rows, open_meta):
         add(G_OPEN, f"{kind}: {label} {w}×{h} mm ({wall.lower()})", cnt, "gab.", f"{cnt} × {w}×{h} mm = {cnt * w * h / 1e6:.3f} m²",
             "Lietotāja ievade", ST_OK, 0.0, pieces=True, rid=oid, article=oart, spec=ospec or f"{kind} {w}×{h} mm")
     areas["openings_ext_m2"], areas["openings_int_m2"] = round(open_area["Ārsiena"], 6), round(open_area["Iekšsiena"], 6)
+    areas["openings_roof_m2"] = round(open_area["Jumts"], 6)
     ext_open_count = sum(c for _k, _l, _w, _h, c, wall in open_rows if wall == "Ārsiena")
     int_open_count = sum(c for _k, _l, _w, _h, c, wall in open_rows if wall == "Iekšsiena")
 
     # ---------------- sienas ----------------
     default_h = _safe(est, "Sienas", lambda: num(project.get("wall_height_mm")), None)
     wall_data = {}
+    seg_info = {}                                                       # posmu informācija: tips, CLT biezums, laukums
     for key, group, label in (("ext_walls", G_EXT, "ārsiena"), ("int_walls", G_INT, "iekšsiena")):
         total_len = gross = 0.0
         segs = []
+        infos = seg_info.setdefault(key, [])
         for i, s in enumerate(project.get(key) or [], 1):
             sname = str(s.get("name") or f"{label} {i}").strip()
             try:
@@ -585,6 +611,25 @@ def estimate(project: dict) -> Estimate:
             total_len += length
             gross += length * h / 1000.0
             segs.append((sname, length, h))
+            infos.append({"name": sname, "gross": length * h / 1000.0, "type": str(s.get("type") or "").strip(),
+                          "clt": _safe(est, f"{group}: {sname}", lambda: num(s.get("clt_mm")), None) or None, "kind": "siena"})
+        if key == "ext_walls":
+            for gi, g in enumerate(project.get("gables") or [], 1):        # zelmiņi: trīsstūra ārsienas laukums ½ × pamats × augstums
+                gname = str(g.get("name") or f"Zelmiņš {gi}").strip()
+                try:
+                    gb, gh = num(g.get("base_m")), num(g.get("height_m"))
+                except ValueError as error:
+                    est.errors.append(f"{group}: {gname}: {error}")
+                    continue
+                if not (gb and gh):
+                    missing(group, f"{gname}: zelmiņa pamats un augstums jāievada")
+                    continue
+                garea = 0.5 * gb * gh
+                gross += garea
+                infos.append({"name": gname, "gross": garea, "type": str(g.get("type") or "").strip(),
+                              "clt": _safe(est, f"{group}: {gname}", lambda: num(g.get("clt_mm")), None) or None, "kind": "zelmiņš"})
+                areas.setdefault("gables_m2", 0.0)
+                areas["gables_m2"] = round(areas["gables_m2"] + garea, 6)
         opening = open_area["Ārsiena" if key == "ext_walls" else "Iekšsiena"]
         net = gross - opening
         if segs and net <= 0:
@@ -611,11 +656,46 @@ def estimate(project: dict) -> Estimate:
     areas["int_both_m2"] = None if int_net is None else round(2 * int_net, 6)
     areas["int_one_m2"] = None if int_net is None else round(int_net, 6)
 
-    # ---------------- jumts ----------------
+    # ---------------- jumts: slīpnes, bruto un neto laukumi ----------------
     roof = project.get("roof") or {}
-    roof_area = None
+    roof_gross = None
+    slope_infos = []
     try:
-        if roof.get("mode") == "slope":
+        if roof.get("mode") == "slopes":
+            slopes = project.get("roof_slopes") or []
+            if not slopes:
+                missing(G_ROOF, "nav ievadīta neviena jumta slīpne")
+            total, complete_slopes = 0.0, True
+            for i, sl in enumerate(slopes, 1):
+                sname = str(sl.get("name") or f"Slīpne {i}").strip()
+                try:
+                    a_in, length, proj, ang = (num(sl.get(k)) for k in ("area_m2", "length_m", "projection_m", "angle_deg"))
+                    clt_t = num(sl.get("clt_mm")) or None
+                except ValueError as error:
+                    est.errors.append(f"{G_ROOF}: {sname}: {error}")
+                    complete_slopes = False
+                    continue
+                if a_in:
+                    g = a_in
+                elif length and proj and ang is not None:
+                    if not 0 <= ang < 80:
+                        est.errors.append(f"{G_ROOF}: {sname}: slīpuma leņķim jābūt 0–80°.")
+                        complete_slopes = False
+                        continue
+                    g = length * proj / math.cos(math.radians(ang))          # bruto = garums × horizontālā projekcija / cos α
+                else:
+                    missing(G_ROOF, f"{sname}: jānorāda laukums VAI garums + horizontālā projekcija + leņķis")
+                    complete_slopes = False
+                    continue
+                if not sl.get("confirmed"):
+                    missing(G_ROOF, f"{sname}: slīpnes ģeometrija nav apstiprināta (atzīmē apstiprinājumu)")
+                    complete_slopes = False
+                    continue
+                total += g
+                slope_infos.append({"name": sname, "gross": g, "type": str(sl.get("type") or "").strip(), "clt": clt_t, "kind": "slīpne"})
+            if slope_infos and complete_slopes:
+                roof_gross = total
+        elif roof.get("mode") == "slope":
             fp, ang = num(roof.get("footprint_m2")), num(roof.get("angle_deg"))
             if not fp or not ang:
                 missing(G_ROOF, "slīpuma aprēķinam jāievada jumta projekcijas laukums un leņķis")
@@ -624,19 +704,45 @@ def estimate(project: dict) -> Estimate:
             elif not roof.get("slope_confirmed"):
                 missing(G_ROOF, "slīpuma aprēķins nav apstiprināts (atzīmē apstiprinājumu)")
             else:
-                roof_area = fp / math.cos(math.radians(ang))
+                roof_gross = fp / math.cos(math.radians(ang))
         else:
-            roof_area = num(roof.get("area_m2")) or None
-            if roof_area is None:
+            roof_gross = num(roof.get("area_m2")) or None
+            if roof_gross is None:
                 missing(G_ROOF, "jumta seguma platība nav ievadīta")
     except ValueError as error:
         est.errors.append(f"{G_ROOF}: {error}")
-    areas["roof_m2"] = None if roof_area is None else round(roof_area, 6)
+    roof_area = roof_gross
+    if roof_gross is not None and open_area["Jumts"]:
+        roof_area = roof_gross - open_area["Jumts"]                      # jumta logi tiek atskaitīti VIENREIZ (dublikāti izslēgti)
+        if roof_area <= 0:
+            est.errors.append(f"{G_ROOF}: jumta logu laukums ({open_area['Jumts']:g} m²) nav mazāks par bruto laukumu ({roof_gross:g} m²).")
+            roof_area = None
+    areas["roof_gross_m2"] = None if roof_gross is None else round(roof_gross, 6)
+    areas["roof_m2"] = areas["roof_net_m2"] = None if roof_area is None else round(roof_area, 6)
+
+    # ---------------- posmu neto laukumi (atveres, kas piesaistītas posmiem; vienīgajam posmam — automātiski) ----------------
+    def allocate(infos, kind, total_open, label):
+        assigned = open_assigned[kind]
+        names = {i["name"] for i in infos}
+        known = sum(v for k, v in assigned.items() if k in names)
+        extra_names = [k for k in assigned if k not in names]
+        for k in extra_names:
+            est.warnings.append(f"Atvere piesaistīta nezināmam {label} «{k}»: piesaiste netiek ņemta vērā.")
+        unassigned = total_open - known
+        carriers = [i for i in infos if i["kind"] != "zelmiņš"]
+        auto = unassigned > 1e-9 and len(carriers) == 1
+        for i in infos:
+            i["net"] = i["gross"] - assigned.get(i["name"], 0.0) - (unassigned if auto and i is carriers[0] else 0.0)
+        return 0.0 if auto else max(unassigned, 0.0)
+
+    unassigned_open = {"ext": allocate(seg_info.get("ext_walls", []), "Ārsiena", open_area["Ārsiena"], "ārsienas posmam"),
+                       "int": allocate(seg_info.get("int_walls", []), "Iekšsiena", open_area["Iekšsiena"], "iekšsienas posmam"),
+                       "roof": allocate(slope_infos, "Jumts", open_area["Jumts"], "jumta slīpnei")}
 
     basis_value = {"floor_net": floor_net, "floor_frame": frame_area if confirmed else None,
                    "pir_free": free_area if confirmed else None, "ext_net": ext_net, "ext_inner": ext_net,
                    "int_one": int_net, "int_both": None if int_net is None else 2 * int_net,
-                   "ceiling": ceiling, "roof": roof_area}
+                   "ceiling": ceiling, "roof": roof_area, "roof_gross": roof_gross}
 
     # ---------------- karkasa koks (sienas, spāres) ----------------
     frames = project.get("frames") or {}
@@ -684,42 +790,92 @@ def estimate(project: dict) -> Estimate:
             add(G_ROOF, "Jumta spāru kokmateriāls (provizoriski)", length_m * b * h / 1e6, "m³", f"{length_m:.3f} m × {b:g}×{h:g} mm",
                 "Lietotāja ievadīts; provizorisks", ST_ASSUMED, waste_default, timber=True)
 
-    # ---------------- CLT paneļi (pamata recepte; Issue #12 ChatGPT komentārs) ----------------
+    # ---------------- konstrukciju tipi (AD): tipa CLT biezums, tipu laukumi ----------------
+    types = {}
+    for t in project.get("construction_types") or []:
+        code = str(t.get("code") or "").strip()
+        if code and t.get("applies_to") in TYPE_APPLIES:
+            types[code] = t
+    type_recipes = [r for r in (project.get("type_recipes") or []) if r.get("enabled") is not False]
+    type_clt = {}
+    for r in type_recipes:
+        if r.get("kind") == "CLT" and str(r.get("type") or "").strip() in types:
+            try:
+                tv = num(r.get("thickness_mm"))
+            except ValueError:
+                tv = None
+            if tv:
+                type_clt[str(r["type"]).strip()] = tv
+    type_area = {}                                                     # (applies, kods) → neto laukums
+    for applies, infos in (("ext", seg_info.get("ext_walls", [])), ("int", seg_info.get("int_walls", [])), ("roof", slope_infos)):
+        for i in infos:
+            if i["type"]:
+                if i["type"] not in types or types[i["type"]].get("applies_to") != applies:
+                    est.warnings.append(f"Posms «{i['name']}»: konstrukcijas tips «{i['type']}» nav definēts šai konstrukciju grupai.")
+                    continue
+                type_area[(applies, i["type"])] = type_area.get((applies, i["type"]), 0.0) + i["net"]
+    areas["type_areas"] = {f"{a}:{c}": round(v, 6) for (a, c), v in type_area.items()}
+
+    # ---------------- CLT paneļi (pamata recepte; Issue #12 ChatGPT komentārs) + biezumi pa posmiem (Issue #16) ----------------
     if construction == "clt":
         clt = project.get("clt") or {}
         floor_panel_area = frame_area if confirmed else None
-        for key, group, title, area, what in (
-                ("ext", G_EXT, "CLT ārsienu paneļi", ext_net, "ārsienu neto laukums (bez atverēm)"),
-                ("int", G_INT, "CLT iekšsienu paneļi", int_net, "iekšsienu neto laukums (viena puse, bez atverēm)"),
-                ("roof", G_ROOF, "CLT jumta paneļi", roof_area, "jumta seguma platība"),
-                ("floor", G_FLOOR, "CLT grīdas paneļi", floor_panel_area, "moduļu grīdas laukums Σ L×W")):
+        for key, group, title, area, what, infos, un in (
+                ("ext", G_EXT, "CLT ārsienu paneļi", ext_net, "ārsienu neto laukums (bez atverēm)", seg_info.get("ext_walls", []), unassigned_open["ext"]),
+                ("int", G_INT, "CLT iekšsienu paneļi", int_net, "iekšsienu neto laukums (viena puse, bez atverēm)", seg_info.get("int_walls", []), unassigned_open["int"]),
+                ("roof", G_ROOF, "CLT jumta paneļi", roof_area, "jumta seguma platība", slope_infos, unassigned_open["roof"]),
+                ("floor", G_FLOOR, "CLT grīdas paneļi", floor_panel_area, "moduļu grīdas laukums Σ L×W", [], 0.0)):
             cfg = clt.get(key) or {}
             if not cfg.get("enabled"):
                 continue
             try:
-                t, w = num(cfg.get("thickness_mm")), num(cfg.get("waste_pct"))
+                t_default, w = num(cfg.get("thickness_mm")), num(cfg.get("waste_pct"))
             except ValueError as error:
                 est.errors.append(f"{group}: {title}: {error}")
                 continue
             w = DEFAULT_WASTE_PCT if w is None else w            # CLT rezerve regulējama atsevišķi no pārējās
             unit = cfg.get("price_unit") if cfg.get("price_unit") in ("m²", "m³") else "m²"
-            common = dict(rid=f"clt:{key}", article=cfg.get("article"), spec=f"CLT panelis, biezums {t:g} mm" if t else "CLT panelis, biezums nav ievadīts",
-                          approved=bool(cfg.get("thickness_confirmed")))
             src = cfg.get("source") or "Lietotāja ievadīts biezums (nav MLK specifikācija)"
-            if area is None:
-                add(group, title, None, unit, what, src, ST_MISSING, **common)
-                continue
-            if not t:
-                add(group, title, None, unit, f"{what} × biezums", src, ST_MISSING, **common)
-                missing(group, f"{title}: paneļa biezums nav ievadīts")
-                continue
-            vol = area * t / 1000.0
-            qty, alt_qty, alt_unit = (area, vol, "m³") if unit == "m²" else (vol, area, "m²")
-            add(group, title, qty, unit, f"{what} {area:.3f} m² × {t:g} mm = {vol:.3f} m³; cena TIKAI par {unit}", src,
-                ST_OK if cfg.get("thickness_confirmed") else ST_UNAPPROVED, w, timber=True, alt_qty=alt_qty, alt_unit=alt_unit,
-                vol_net=vol, vol_order=vol * (1 + w / 100.0),
-                note=f"Alternatīvā vienība (netiek cenota): {alt_qty:.3f} {alt_unit}", **common)
+            # posmu biezumi: posma clt_mm → tipa CLT slānis; ja neviens posms to nenorāda — viens biezums visam laukumam (iepriekšējā uzvedība)
+            parts = None
+            if infos and any((i["clt"] or type_clt.get(i["type"])) for i in infos):
+                parts, unresolved = {}, 0.0
+                for i in infos:
+                    tv = i["clt"] or type_clt.get(i["type"]) or t_default
+                    if tv:
+                        parts[tv] = parts.get(tv, 0.0) + i["net"]
+                    else:
+                        unresolved += i["net"]
+                if unresolved:
+                    missing(group, f"{title}: posmiem bez biezuma ({unresolved:.2f} m²) nav ievadīts CLT biezums")
+                if un:
+                    missing(group, f"{title}: atveres bez posma piesaistes ({un:.2f} m²) netiek atskaitītas pa biezumiem — piesaisti atveres posmiem")
+                parts = sorted(parts.items())
+            else:
+                parts = [(t_default, area)]
+            for tv, part_area in parts:
+                grouped = len(parts) > 1 or bool(infos and any((i["clt"] or type_clt.get(i["type"])) for i in infos))
+                name = f"{title} {tv:g} mm" if grouped and tv else title
+                rid = f"clt:{key}:{tv:g}" if grouped and tv else f"clt:{key}"
+                common = dict(rid=rid, article=(cfg.get("articles") or {}).get(f"{tv:g}") if grouped and tv else None,
+                              spec=f"CLT panelis, biezums {tv:g} mm" if tv else "CLT panelis, biezums nav ievadīts",
+                              approved=bool(cfg.get("thickness_confirmed")))
+                common["article"] = common["article"] or cfg.get("article")
+                if part_area is None:
+                    add(group, name, None, unit, what, src, ST_MISSING, **common)
+                    continue
+                if not tv:
+                    add(group, name, None, unit, f"{what} × biezums", src, ST_MISSING, **common)
+                    missing(group, f"{title}: paneļa biezums nav ievadīts")
+                    continue
+                vol = part_area * tv / 1000.0
+                qty, alt_qty, alt_unit = (part_area, vol, "m³") if unit == "m²" else (vol, part_area, "m²")
+                add(group, name, qty, unit, f"{what} {part_area:.3f} m² × {tv:g} mm = {vol:.3f} m³; cena TIKAI par {unit}", src,
+                    ST_OK if cfg.get("thickness_confirmed") else ST_UNAPPROVED, w, timber=True, alt_qty=alt_qty, alt_unit=alt_unit,
+                    vol_net=vol, vol_order=vol * (1 + w / 100.0),
+                    note=f"Alternatīvā vienība (netiek cenota): {alt_qty:.3f} {alt_unit}", **common)
 
+    types_mode = project.get("layers_mode") == "types"
     # ---------------- slāņi (vienots mehānisms; dublikātu pārbaude) ----------------
     seen = {}
     for i, layer in enumerate(project.get("layers") or [], 1):
@@ -731,6 +887,8 @@ def estimate(project: dict) -> Estimate:
         if group is None or not name or basis_key not in BASES:
             est.errors.append(f"{G_MANUAL}: slāņa rinda {i} ir nepilnīga (grupa/nosaukums/pamats).")
             continue
+        if types_mode and group in (G_EXT, G_INT, G_ROOF):
+            continue                                       # AD tipu režīmā šo grupu slāņus dod konstrukciju tipu receptes (nav dubultošanas)
         unit = layer.get("unit") if layer.get("unit") in UNITS else "m²"
         try:
             thickness, step, waste = num(layer.get("thickness_mm")), num(layer.get("step_mm")), num(layer.get("waste_pct"))
@@ -772,6 +930,71 @@ def estimate(project: dict) -> Estimate:
         else:
             add(group, name, area, unit, f"{BASES[basis_key]}", source, lstatus, waste, **lx)
 
+    # ---------------- konstrukciju tipu receptes (AD): vairākas latojuma kārtas, plāksnes, siltinājums, apdares, stiprinājumi ----------------
+    catalog0 = {str(c.get("article")).strip(): c for c in project.get("catalog") or [] if str(c.get("article") or "").strip()}
+    seen_tr, used_types = set(), set()
+    for i, r in enumerate(type_recipes if types_mode else [], 1):                # tipu receptes tikai «tipu» režīmā (manuālajā — globālie slāņi): nav dubultošanas
+        code = str(r.get("type") or "").strip()
+        t = types.get(code)
+        name = str(r.get("name") or "").strip()
+        if t is None or not name:
+            est.errors.append(f"{G_MANUAL}: tipu receptes rinda {i} ir nepilnīga (nezināms tips «{code}» vai nav nosaukuma).")
+            continue
+        kind = r.get("kind") if r.get("kind") in TYPE_KINDS else "cits"
+        if kind == "CLT":
+            continue                                       # CLT biezumu ņem CLT paneļu rindas (tips → posma biezums); materiālu rinda netiek dublēta
+        group = TYPE_APPLIES[t["applies_to"]]
+        try:
+            thickness, step, norm, waste, pack = (num(r.get(k)) for k in ("thickness_mm", "step_mm", "norm", "waste_pct", "pack_size"))
+        except ValueError as error:
+            est.errors.append(f"{group}: tips {code} «{name}»: {error}")
+            continue
+        unit = str(r.get("unit") or "m²").strip()
+        dup = (code, norm_name(name), kind, thickness, step, unit)
+        if dup in seen_tr:
+            est.warnings.append(f"Tipa {code} receptes slānis «{name}» atkārtojas ar tiem pašiem parametriem: dublikāts netiek skaitīts.")
+            continue
+        seen_tr.add(dup)
+        area = type_area.get((t["applies_to"], code))
+        if area is None:
+            if (t["applies_to"], code) not in {k for k in type_area}:
+                est.warnings.append(f"Tips {code} nav piesaistīts nevienam posmam: receptes «{name}» netiek skaitītas.")
+            continue
+        used_types.add(code)
+        art = str(r.get("article") or "").strip() or None
+        cat = catalog0.get(art) or {}
+        approved = bool(r.get("approved"))
+        base = dict(rid=line_id("typerecipe", r, f"{code} {name}"), article=art, spec=str(r.get("spec") or cat.get("spec") or ""),
+                    module=str(r.get("module") or ""), stage=str(r.get("stage") or ""), approved=approved,
+                    pack_size=pack or num(cat.get("pack_size")) or None, detail=str(r.get("detail") or ""),
+                    assumption=str(r.get("assumption") or ""))
+        w = group_waste(group) if waste is None else waste
+        src = str(r.get("source") or "Lietotāja tipa recepte")[:120]
+        status = ST_OK if approved else ST_UNAPPROVED
+        label = f"{name} ({code})"
+        basis = f"Tips {code} neto laukums {area:.3f} m²"
+        if unit == "m²":
+            mult = norm if norm else 1.0
+            add(group, label, area * mult, unit, basis + (f" × {mult:g}" if norm else ""), src, status, w, **base)
+        elif unit == "m³":
+            if not thickness:
+                add(group, label, None, unit, basis + " × biezums", src, ST_MISSING, **base)
+                missing(group, f"Tips {code} «{name}»: biezums nav ievadīts")
+            else:
+                add(group, label, area * thickness / 1000.0, unit, f"{basis} × {thickness:g} mm", src, status, w, **base)
+        elif unit == "m":
+            if not step:
+                add(group, label, None, unit, basis + " / solis", src, ST_MISSING, **base)
+                missing(group, f"Tips {code} «{name}»: solis nav ievadīts")
+            else:
+                add(group, label, area * 1000.0 / step, unit, f"{basis} / {step:g} mm", src, status, w, **base)
+        else:
+            if norm is None:
+                add(group, label, None, unit, basis + " × norma", src, ST_MISSING, **base)
+                missing(group, f"Tips {code} «{name}»: patēriņa norma uz m² nav ievadīta")
+            else:
+                add(group, label, area * norm, unit, f"{basis} × norma {norm:g} {unit}/m²", src, status, w, pieces=(unit == "gab."), **base)
+
     # ---------------- terases un manuālās rindas ----------------
     for i, t in enumerate(project.get("terraces") or [], 1):
         label = str(t.get("name") or f"Terase {i}").strip()
@@ -803,10 +1026,12 @@ def estimate(project: dict) -> Estimate:
             continue
         pack = _safe(est, f"{G_MANUAL}: rinda {i}", lambda: num(m.get("pack_size")), None)
         add(group, material, qty, unit, "Lietotāja manuāli ievadīts apjoms", str(m.get("source") or "Manuāli")[:120], ST_MANUAL,
-            group_waste(group) if waste is None else waste, pieces=(unit == "gab."), rid=line_id("manual", m, material),
+            (0.0 if (str(m.get("detail") or "") == "komplekts" or m.get("cost_scope") == "ārpakalpojums") else group_waste(group))
+            if waste is None else waste, pieces=(unit == "gab."), rid=line_id("manual", m, material),
             article=str(m.get("article") or "").strip() or None,
             spec=str(m.get("spec") or ""), module=str(m.get("module") or ""), stage=str(m.get("stage") or ""),
-            pack_size=pack or None, approved=bool(m.get("approved")))
+            pack_size=pack or None, approved=bool(m.get("approved")), detail=str(m.get("detail") or ""),
+            assumption=str(m.get("assumption") or ""), cost_scope=m.get("cost_scope") if m.get("cost_scope") in COST_SCOPES else "materiāli")
 
     # ---------------- receptes ar rediģējamām patēriņa normām (stiprinājumi, lentes, MEP u.c.) ----------------
     catalog = {str(c.get("article")).strip(): c for c in project.get("catalog") or [] if str(c.get("article") or "").strip()}
@@ -838,10 +1063,14 @@ def estimate(project: dict) -> Estimate:
             continue
         if pack is None:
             pack = _safe(est, f"{group}: «{name}»", lambda: num(cat.get("pack_size")), None)
-        waste = group_waste(group) if waste is None else waste
+        scope_in = line.get("cost_scope") if line.get("cost_scope") in COST_SCOPES else "materiāli"
+        no_reserve = str(line.get("detail") or "") == "komplekts" or scope_in == "ārpakalpojums"      # komplekts/ārpakalpojums: viens vesels, bez rezerves
+        waste = (0.0 if no_reserve else group_waste(group)) if waste is None else waste
         approved = bool(line.get("approved"))
         extra = dict(rid=line_id("recipe", line, name), article=art, spec=str(line.get("spec") or cat.get("spec") or ""), module=str(line.get("module") or ""),
-                     stage=str(line.get("stage") or ""), pack_size=pack or None, approved=approved)
+                     stage=str(line.get("stage") or ""), pack_size=pack or None, approved=approved,
+                     detail=str(line.get("detail") or ""), assumption=str(line.get("assumption") or ""),
+                     cost_scope=line.get("cost_scope") if line.get("cost_scope") in COST_SCOPES else "materiāli")
         source = str(line.get("source") or "Lietotāja recepte")[:120]
         status = ST_OK if approved else ST_UNAPPROVED
         if driver == "direct":
@@ -915,6 +1144,14 @@ def estimate(project: dict) -> Estimate:
             status = ST_OK if approved else ST_UNAPPROVED
         est.labour.append(LabourRow(uid(line_id("op", op, name)), group, name, stage, module, qty, unit, norm_h, hours, rate_used, cost,
                                     status, basis, source, approved))
+
+    # ---------------- AD komplekti/normas: pieņēmums obligāts; komplekts ar montāžu nedrīkst dublēt darba operācijas ----------------
+    for r in est.rows:
+        if r.detail in ("komplekts", "norma") and r.group in AD_ASSUMPTION_GROUPS and not r.assumption.strip():
+            est.warnings.append(f"«{r.material}» ({r.group}): AD stadijā {r.detail} jāpievieno skaidrs pieņēmums — nav norādīts.")
+        if r.cost_scope in ("materiāli+montāža", "ārpakalpojums") and r.qty is not None and any(x.group == r.group for x in est.labour):
+            est.errors.append(f"Dubultošana: «{r.material}» ({r.group}) izmaksu segums «{r.cost_scope}», bet grupā ir arī darba operācijas. "
+                              "Atstāj vienu (komplekta cena jau ietver darbu).")
 
     # ---------------- manuālās izmaksas (ārpakalpojumi, transports, montāža, cits) ----------------
     for item in project.get("other_costs") or []:
@@ -1020,7 +1257,7 @@ def _controls(est, a):
 EXPORT_HEADER = ["Artikuls", "Materiāls", "Specifikācija", "Mervienība", "Neto", "Rezerve_%", "Pasūtāmais", "Iepakojums",
                  "Vienības_cena_EUR", "Izmaksas_EUR", "Modulis_telpa_sistēma", "Konstrukciju_grupa", "Ražošanas_posms",
                  "Avots_pieņēmums", "Apstiprinājums", "Statuss", "Aprēķina_pamats", "Alternatīvā_vienība_(nav_cenota)",
-                 "Rindas_ID", "Piezīme"]
+                 "Rindas_ID", "Piezīme", "Detalizācija", "AD_pieņēmums", "Izmaksu_segums"]
 NOT_FINAL = "PROVIZORISKA MATERIĀLU TĀME — NAV GALA PIEDĀVĀJUMS"
 
 
@@ -1068,11 +1305,11 @@ def export_rows(project_name, est: Estimate):
                      "" if r.waste_pct is None else f"{r.waste_pct:g}", _fmt(r.order_qty),
                      "" if r.pack_size is None else f"{r.pack_size:g}", _fmt(r.unit_price, 2), _fmt(r.cost, 2), _csv_safe(r.module),
                      _csv_safe(r.group), _csv_safe(r.stage), _csv_safe(r.source), r.approval, r.status, _csv_safe(r.basis), alt,
-                     _csv_safe(r.row_id), _csv_safe(r.note)])
+                     _csv_safe(r.row_id), _csv_safe(r.note), _csv_safe(r.detail), _csv_safe(r.assumption), _csv_safe(r.cost_scope)])
     for group, items in est.missing.items():
         for item in items:
             rows.append(["", _csv_safe(item), "", "", "", "", "", "", "", "", "", _csv_safe(group), "", "", "", ST_MISSING, "", "", "",
-                         "NEPILNA SADAĻA"])
+                         "NEPILNA SADAĻA", "", "", ""])
     for work in est.excluded:
-        rows.append(["", _csv_safe(work), "", "", "", "", "", "", "", "", "", "Neiekļauts", "", "", "", "NAV IEKĻAUTS", "", "", "", ""])
+        rows.append(["", _csv_safe(work), "", "", "", "", "", "", "", "", "", "Neiekļauts", "", "", "", "NAV IEKĻAUTS", "", "", "", "", "", "", ""])
     return rows

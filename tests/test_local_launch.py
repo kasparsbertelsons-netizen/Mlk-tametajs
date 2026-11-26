@@ -148,7 +148,7 @@ class TestRepositorySafety(unittest.TestCase):
             self.skipTest("git nav pieejams (piem., ZIP lejupielāde)")                     # skaidri paziņots
         if result.returncode != 0:
             self.skipTest("mape nav Git repozitorijs (piem., ZIP lejupielāde)")
-        self.assertTrue(all(p.startswith("samples/ad_vector/") for p in result.stdout.split()), result.stdout)
+        self.assertTrue(all(p.startswith(("samples/ad_vector/", "samples/ad_building/")) for p in result.stdout.split()), result.stdout)
 
     def test_docs_are_honest_about_what_was_tested_and_about_internet_use(self):
         text = (ROOT / "docs" / "LOCAL_WINDOWS.md").read_text(encoding="utf-8")

@@ -159,3 +159,7 @@ Jumts 120 m² / cos 20° = 127,70 m². Grīdas neto 72 m² (terase 12 m² atsevi
 | PVN 21 % | 18 017,69 |
 | **Summa ar PVN** | **103 816,24** |
 Visi skaitļi ir sintētiski (nav MLK dati). Testi: `python -m unittest tests.test_budget_pricing tests.test_catalog_import tests.test_project_io tests.test_xlsx_export`.
+
+## 4. posms (Issue #16): AD-first
+AD PDF → kandidāti → apstiprināšana → tāme; zelmiņi, jumta slīpnes (bruto/neto), CLT biezumi pa posmiem, receptes pa konstrukciju tipiem, AD komplekti/normas ar pieņēmumu, fiksēta AD prognoze un lokāla
+faktiskā kontrole (Moneo kontroltāme). Pilns apraksts: `docs/AD_BUILDING_IMPORT.md`. AD demonstrācija (sintētiska, pilnībā cenota): pašizmaksa 100 973,20; cena bez PVN 116 119,18; ar PVN 140 504,21 EUR.

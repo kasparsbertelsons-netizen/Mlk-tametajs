@@ -1,0 +1,19 @@
+﻿Posms;Artikuls;Nosaukums;Mērv.;Plānotais daudzums;Faktiskais daudzums;Plānotā cena;Faktiskā cena;Plānotā summa;Faktiskā summa;Veids;Rindas tips
+Posms: Karkasa ražošana;;;;;;;;;;;
+Karkasa ražošana;DEMO-CLT-100;CLT panelis 100 mm;m³;17,5;18,1;520,0;535,0;9100,0;9683,5;Materiāls;Artikuls
+Karkasa ražošana;DEMO-CLT-140;CLT panelis 140 mm;m³;4,2;4,2;560,0;560,0;2352,0;2352,0;Materiāls;Artikuls
+Karkasa ražošana;DEMO-LATA-50;Latas 50×50;m;1050,0;1180,0;1,4;1,45;1470,0;1711,0;Materiāls;Artikuls
+Karkasa ražošana;;Grupas kopsumma materiāli un ārpakalpojumi;;;;;;12922,0;13746,5;;Grupa
+Karkasa ražošana;;Posma kopsumma;;;;;;12922,0;13746,5;;Posms
+Posms: Apdare un montāža;;;;;;;;;;;
+Apdare un montāža;DEMO-GKL-12;Ģipškartons 12.5 mm;m²;180,0;170,0;6,0;6,3;1080,0;1071,0;Materiāls;Artikuls
+Apdare un montāža;DEMO-SKR-6x80;Skrūve 6×80;gab.;800,0;1000,0;0,12;0,12;96,0;120,0;Materiāls;Artikuls
+Apdare un montāža;DEMO-MEP-AP;MEP apakšuzņēmējs (darbs);kompl.;1,0;1,0;4000,0;4350,0;4000,0;4350,0;Ārpakalpojums;Artikuls
+Apdare un montāža;DEMO-NAV-PROGNOZE;Papildu palīgmateriāls;gab.;10,0;12,0;5,0;5,0;50,0;60,0;Materiāls;Artikuls
+Apdare un montāža;DEMO-VEJA;Vēja membrāna (eksportā nav mērvienības);;128,0;128,0;2,1;2,2;268,8;281,6;Materiāls;Artikuls
+Apdare un montāža;;Grupas kopsumma materiāli un ārpakalpojumi;;;;;;5494,8;5882,6;;Grupa
+Apdare un montāža;;Posma kopsumma;;;;;;5494,8;5882,6;;Posms
+Karkasa ražošana;;Stundas — karkasa ražošana;h;120,0;130,0;;;;;Stundas;Stundas
+Apdare un montāža;;Stundas — apdare un montāža;h;280,0;270,0;;;;;Stundas;Stundas
+Loģistika;;Stundas — loģistika (nav prognozē);h;10,0;14,0;;;;;Stundas;Stundas
+;;Kopā;;;;;;18416,8;19629,1;;Kopā

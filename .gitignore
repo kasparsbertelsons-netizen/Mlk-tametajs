@@ -13,5 +13,10 @@ outputs/
 !samples/ad_vector/
 !samples/ad_vector/*.pdf
 
+# Sintētiskie AD ēkas paraugi (tools/synthetic_ad_building.py): PDF un XLSX kontroltāme — TIKAI ģenerēti, SINTĒTISKI faili
+!samples/ad_building/
+!samples/ad_building/*.pdf
+!samples/ad_building/*.xlsx
+
 # Lokālie diagnostikas pārskati satur PDF saturu: nekad nepublicēt
 local_reports/

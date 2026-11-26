@@ -180,13 +180,13 @@ def client_sheet(ws, project, est, b):
 
 MAT_HEADER = ["Rindas ID", "Konstrukciju grupa", "Artikuls", "Materiāls", "Specifikācija", "Mērvienība", "Neto", "Rezerve %", "Pasūtāmais",
               "Iepakojums", "Cena EUR/vienība", "Izmaksas EUR", "Modulis/telpa/sistēma", "Ražošanas posms", "Avots/pieņēmums",
-              "Apstiprinājums", "Statuss", "Aprēķina pamats", "Alternatīvā vienība (nav cenota)"]
+              "Apstiprinājums", "Statuss", "Aprēķina pamats", "Alternatīvā vienība (nav cenota)", "Detalizācija", "AD pieņēmums", "Izmaksu segums"]
 
 
 def _mat_row(r):
     alt = None if r.alt_qty is None else f"{r.alt_qty:.3f} {r.alt_unit}"
     return [r.row_id, r.group, r.article or "", r.material, r.spec, r.unit, r.qty, r.waste_pct, r.order_qty, r.pack_size, r.unit_price,
-            r.cost, r.module, r.stage, r.source, r.approval, r.status, r.basis, alt or ""]
+            r.cost, r.module, r.stage, r.source, r.approval, r.status, r.basis, alt or "", r.detail, r.assumption, r.cost_scope]
 
 
 MAT_FMT = {7: QTY, 9: QTY, 10: '0.##', 11: MONEY, 12: MONEY}
@@ -201,7 +201,7 @@ def materials_sheet(ws, est):
     r += 2
     cost = sum(x.cost for x in est.rows if x.cost is not None)
     _row(ws, r, ["", "", "", "Materiāli kopā (tikai rindas ar cenu)", "", "", "", "", "", "", "", cost], {12: MONEY}, bold=True)
-    _widths(ws, [28, 26, 14, 44, 30, 10, 12, 10, 12, 10, 12, 14, 18, 18, 30, 16, 26, 44, 22])
+    _widths(ws, [28, 26, 14, 44, 30, 10, 12, 10, 12, 10, 12, 14, 18, 18, 30, 16, 26, 44, 22, 14, 44, 18])
     ws.freeze_panes = "E2"
 
 
@@ -253,6 +253,10 @@ def assumptions_sheet(ws, project, est, b):
                       "CLT neto ģeometrija atšķiras no iepirkuma bruto/izgriezumiem; paneļu optimizācija nav realizēta."])
     block("Nepilnība (kāpēc budžets ir nepilns)", b["reasons"])
     block("Neiekļautie darbi", est.excluded)
+    block("AD komplekti un parametriskās normas (pieņēmumi)", [f"{r.group}: {r.material} — {r.detail}; {r.assumption or 'PIEŅĒMUMS NAV NORĀDĪTS'}"
+                                                              for r in est.rows if r.detail in ("komplekts", "norma")])
+    block("AD PDF izcelsme (apstiprinātie lauki)", [f"{f['field']}: lpp. {f['page']}, {f['source']}, pārliecība {f['confidence']} — {f['evidence'][:80]}"
+                                                     for f in ((project.get("ad_import") or {}).get("fields") or [])][:60])
     block("Brīdinājumi", est.warnings)
     block("Kļūdas", est.errors)
     block("Nepilnās sadaļas", [f"{g}: {m}" for g, items in est.missing.items() for m in items])

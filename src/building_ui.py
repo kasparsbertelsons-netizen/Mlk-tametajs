@@ -15,6 +15,10 @@ from src.building_estimate import (
     BASES, COST_CATEGORIES, CONSTRUCTIONS, DRIVERS, GROUPS, LAYER_GROUPS, LINE_LISTS, MANUAL_GROUPS, NOT_FINAL, STAGE_NOTE, ST_DUP,
     UNITS, confirm_review, default_layers, empty_project, ensure_ids, estimate, export_rows, module_fp, project_fingerprint,
 )
+from src.ad_pdf_ui import render_ad_import
+from src.building_demo import demo_ad_project
+from src.building_estimate import DETAIL_LEVELS, COST_SCOPES, TYPE_APPLIES, TYPE_KINDS
+from src.control_ui import render_control
 from src.catalog_import import (
     apply_catalog, catalog_template_csv, catalog_template_xlsx, diff_catalog, parse_catalog_file,
 )
@@ -39,6 +43,11 @@ def _project():
 
 def _load_demo():
     st.session_state[KEY] = demo_project()
+    st.session_state[VER] = st.session_state.get(VER, 0) + 1
+
+
+def _load_ad_demo():
+    st.session_state[KEY] = demo_ad_project()
     st.session_state[VER] = st.session_state.get(VER, 0) + 1
 
 
@@ -69,16 +78,27 @@ def _records(df, numeric=(), boolean=()):
     return out
 
 
-def _table(project, key, columns, config, numeric=(), boolean=(), label=None, help_text=None):
+def _obj(df, skip):
+    """Tekstu kolonnas → object (tukša kolonna nedrīkst kļūt par float; Streamlit tipu saderība)."""
+    for col in df.columns:
+        if col not in skip:
+            df[col] = df[col].astype(object)
+    return df
+
+
+def _table(project, key, columns, config, numeric=(), boolean=(), label=None, help_text=None, bool_true=()):
     ver = st.session_state.get(VER, 0)
     if key in LINE_LISTS:                                   # stabila rindas identitāte (slēpta kolonna)
         columns = ["id"] + list(columns)
         config = {**config, "id": None}
     df = pd.DataFrame(project.get(key) or [], columns=columns)
+    for col in df.columns:
+        if col not in numeric and col not in boolean:
+            df[col] = df[col].astype(object)                  # tukšas teksta kolonnas nedrīkst kļūt par float (Streamlit tipu pārbaude)
     for col in numeric:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     for col in boolean:
-        df[col] = df[col].fillna(False).astype(bool)
+        df[col] = df[col].fillna(col in bool_true).astype(bool)
     if help_text:
         st.caption(help_text)
     edited = st.data_editor(df, num_rows="dynamic", hide_index=True, use_container_width=True, column_config=config,
@@ -125,6 +145,8 @@ def render_building_mode():
     c1.button("Ielādēt demonstrācijas projektu", key="bp_demo", on_click=_load_demo, use_container_width=True,
               help="Sintētisks projekts: nav reāls MLK projekts, cenas vai rasējumi.")
     c2.button("Notīrīt projektu", key="bp_clear", on_click=_clear, use_container_width=True)
+    st.button("Ielādēt AD demonstrāciju (no sintētiska AD PDF)", key="bp_demo_ad", on_click=_load_ad_demo, use_container_width=True,
+              help="Sintētisks AD PDF → apstiprināti kandidāti → AD tipu receptes → pilnībā cenota tāme.")
     notice_box = st.container()                  # FIKSĒTS konteiners: pārejoši paziņojumi nedrīkst nobīdīt sadaļas (citādi izvēršamās sadaļas aizveras)
     with notice_box:
         if st.session_state.get("bp_notice"):
@@ -148,11 +170,18 @@ def render_building_mode():
         if st.session_state.pop("bp_switch_notice", None):
             st.warning("Konstrukcijas tips mainīts: slāņu saraksts aizstāts ar attiecīgā tipa noklusējumu (iepriekšējie slāņu labojumi zaudēti).")
 
+    stage = project.get("stage", "AD")
+    st.caption(f"Projekta stadija: **{ {'AD': 'AD prognoze (sākotnējā)', 'PD': 'PD detalizācija (atvasināta kopija)', 'kalibrēta': 'Kalibrētā versija (atvasināta kopija)'}.get(stage, stage) }**. "
+               "AD tāme tiek nodalīta no vēlākās PD detalizācijas un faktiskajiem datiem.")
+    with st.expander("0. AD PDF → tāmes ievaddati (kandidāti ar apstiprināšanu)", expanded=False):
+        render_ad_import(project, ver, KEY, VER)
+
     with st.expander("1. Moduļi (grīdas rāmis — esošais kodols)", expanded=not project["modules"]):
         st.caption("Katrs modulis ir taisnstūris ar APSTIPRINĀTIEM L un W (mm). Atzīmē «Apstiprināts»; mainot L, W vai asis, "
                    "apstiprinājums tiek atcelts. Pastiprinājumu asis (nav obligāti): mm no moduļa gala, atdalītas ar atstarpi "
                    "(skat. docs/FLOOR_FRAME_REINFORCEMENT.md). Neapstiprināti moduļi netiek skaitīti.")
-        _table(project, "modules", ["name", "length_mm", "width_mm", "axes", "confirmed"], {
+        _table(project, "modules", ["name", "length_mm", "width_mm", "axes", "confirmed", "source_key"], {
+            "source_key": None,                                                  # moduļa avota identitāte (slēpta; netiek zaudēta rediģējot)
             "name": st.column_config.TextColumn("Modulis"),
             "length_mm": st.column_config.NumberColumn("L (mm)", min_value=0, step=100),
             "width_mm": st.column_config.NumberColumn("W (mm)", min_value=0, step=100),
@@ -208,41 +237,64 @@ def render_building_mode():
             for rec in edited.to_dict("records"):
                 clt[rec["key"]] = {"enabled": bool(rec["enabled"]), "thickness_mm": _clean(rec["thickness_mm"]),
                                    "thickness_confirmed": bool(rec["thickness_confirmed"]), "price_unit": rec["price_unit"] or "m²",
-                                   "waste_pct": _clean(rec["waste_pct"]), "article": _clean(rec["article"]), "source": _clean(rec["source"]) or ""}
+                                   "waste_pct": _clean(rec["waste_pct"]), "article": _clean(rec["article"]), "source": _clean(rec["source"]) or "",
+                                   "articles": (clt.get(rec["key"]) or {}).get("articles") or {}}      # artikuli pa biezumiem (AD) netiek zaudēti
 
     wall_cfg = {"name": st.column_config.TextColumn("Posms"),
                 "length_m": st.column_config.NumberColumn("Garums (m)", min_value=0.0),
-                "height_mm": st.column_config.NumberColumn("Augstums (mm) — tukšs = noklusējums", min_value=0)}
+                "height_mm": st.column_config.NumberColumn("Augstums (mm) — tukšs = noklusējums", min_value=0),
+                "type": st.column_config.TextColumn("Konstr. tips (kods)"),
+                "clt_mm": st.column_config.NumberColumn("CLT biezums (mm), neobligāti", min_value=0.0)}
+    WALL_COLS = ["name", "length_m", "height_mm", "type", "clt_mm"]
     with st.expander("3. Ārsienas (faktiskie garumi)", expanded=False):
         st.caption("Ievadi FAKTISKO ārējo sienu garumus. Kopīgās moduļu šuves NAV fasāde: neieraksti tās; programma salīdzina ar "
                    "moduļu perimetru.")
         _number("Noklusējuma sienu augstums (mm) — orientējošs, rediģējams", project, ("wall_height_mm",), step=50.0)
-        _table(project, "ext_walls", ["name", "length_m", "height_mm"], wall_cfg, numeric=("length_m", "height_mm"))
+        _table(project, "ext_walls", WALL_COLS, wall_cfg, numeric=("length_m", "height_mm", "clt_mm"))
+        st.markdown("**Zelmiņi** (trīsstūra gala sienas): laukums = ½ × pamats × augstums; ieskaitīti ārsienu bruto laukumā")
+        _table(project, "gables", ["name", "base_m", "height_m", "type", "clt_mm"], {
+            "name": st.column_config.TextColumn("Zelmiņš"), "base_m": st.column_config.NumberColumn("Pamats (m)", min_value=0.0),
+            "height_m": st.column_config.NumberColumn("Augstums (m)", min_value=0.0), "type": st.column_config.TextColumn("Konstr. tips"),
+            "clt_mm": st.column_config.NumberColumn("CLT biezums (mm)", min_value=0.0)}, numeric=("base_m", "height_m", "clt_mm"))
         if project.get("construction") == "frame":
             _frame_inputs(project, "ext", "Ārsienu karkass (nav apstiprināts, ja nav zināms)")
 
     with st.expander("4. Iekšsienas", expanded=False):
-        _table(project, "int_walls", ["name", "length_m", "height_mm"], wall_cfg, numeric=("length_m", "height_mm"))
+        _table(project, "int_walls", WALL_COLS, wall_cfg, numeric=("length_m", "height_mm", "clt_mm"))
         if project.get("construction") == "frame":
             _frame_inputs(project, "int", "Iekšsienu karkass (nav apstiprināts, ja nav zināms)")
 
     with st.expander("5. Logi un durvis (atveres atskaita attiecīgajā sienu grupā)", expanded=False):
-        _table(project, "openings", ["kind", "name", "article", "width_mm", "height_mm", "count", "wall"], {
-            "article": st.column_config.TextColumn("Artikuls"),
+        st.caption("Atveres: ārējās, iekšējās un JUMTA atsevišķi. «Posms» (neobligāti) piesaista atveri konkrētai sienai/slīpnei (atskaitīšana pa tipiem/CLT biezumiem). "
+                   "Viena un tā pati atvere (nosaukums+izmērs+siena+posms) netiek atskaitīta divreiz.")
+        _table(project, "openings", ["kind", "name", "article", "width_mm", "height_mm", "count", "wall", "segment"], {
+            "article": st.column_config.TextColumn("Artikuls"), "segment": st.column_config.TextColumn("Posms/slīpne"),
             "kind": st.column_config.SelectboxColumn("Veids", options=["Logs", "Durvis"]),
             "name": st.column_config.TextColumn("Marķējums"),
             "width_mm": st.column_config.NumberColumn("Platums (mm)", min_value=0),
             "height_mm": st.column_config.NumberColumn("Augstums (mm)", min_value=0),
             "count": st.column_config.NumberColumn("Skaits", min_value=0, step=1),
-            "wall": st.column_config.SelectboxColumn("Siena", options=["Ārsiena", "Iekšsiena"])},
+            "wall": st.column_config.SelectboxColumn("Siena", options=["Ārsiena", "Iekšsiena", "Jumts"])},
             numeric=("width_mm", "height_mm", "count"))
 
     with st.expander("6. Jumts", expanded=False):
         roof = project["roof"]
-        mode = st.radio("Jumta seguma platība", ["Ievadu faktisko platību", "Slīpuma aprēķins (jāapstiprina)"], horizontal=False,
-                        index=1 if roof.get("mode") == "slope" else 0, key=f"bp_roofmode_{ver}")
-        roof["mode"] = "slope" if mode.startswith("Slīpuma") else "area"
-        if roof["mode"] == "area":
+        modes = ["Ievadu faktisko platību", "Slīpuma aprēķins (jāapstiprina)", "Slīpnes (divslīpju jumts, AD)"]
+        mode = st.radio("Jumta bruto platība", modes, horizontal=False,
+                        index={"slope": 1, "slopes": 2}.get(roof.get("mode"), 0), key=f"bp_roofmode_{ver}")
+        roof["mode"] = {1: "slope", 2: "slopes"}.get(modes.index(mode), "area")
+        if roof["mode"] == "slopes":
+            st.caption("Katra slīpne: bruto laukums = garums × horizontālā projekcija / cos(leņķis) VAI tieši ievadīts laukums; apstiprini katru slīpni. "
+                       "CLT biezums var atšķirties pa slīpnēm. Jumta logi (sadaļa 5, siena = Jumts) tiek atskaitīti VIENREIZ → neto laukums.")
+            _table(project, "roof_slopes", ["name", "length_m", "projection_m", "angle_deg", "area_m2", "type", "clt_mm", "confirmed"], {
+                "name": st.column_config.TextColumn("Slīpne"), "length_m": st.column_config.NumberColumn("Garums (m)", min_value=0.0),
+                "projection_m": st.column_config.NumberColumn("Horiz. projekcija (m)", min_value=0.0),
+                "angle_deg": st.column_config.NumberColumn("Leņķis (°)", min_value=0.0),
+                "area_m2": st.column_config.NumberColumn("Bruto laukums (m²) — tieši", min_value=0.0),
+                "type": st.column_config.TextColumn("Konstr. tips"), "clt_mm": st.column_config.NumberColumn("CLT biezums (mm)", min_value=0.0),
+                "confirmed": st.column_config.CheckboxColumn("Apstiprināts")}, numeric=("length_m", "projection_m", "angle_deg", "area_m2", "clt_mm"),
+                boolean=("confirmed",))
+        elif roof["mode"] == "area":
             _number("Jumta seguma faktiskā platība (m²)", project, ("roof", "area_m2"), step=1.0)
         else:
             _number("Jumta projekcijas (plāna) laukums (m²), ieskaitot izbīdes", project, ("roof", "footprint_m2"), step=1.0)
@@ -259,6 +311,7 @@ def render_building_mode():
         layers["basis"] = layers["basis"].map(BASES).fillna(layers["basis"])
         for col in ("thickness_mm", "step_mm", "waste_pct"):
             layers[col] = pd.to_numeric(layers[col], errors="coerce")
+        _obj(layers, ("enabled", "approved", "thickness_mm", "step_mm", "waste_pct"))
         layers["enabled"] = layers["enabled"].fillna(True).astype(bool)
         layers["approved"] = layers["approved"].fillna(False).astype(bool)
         edited = st.data_editor(layers, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"bp_layers_{ver}",
@@ -280,16 +333,41 @@ def render_building_mode():
             rec["basis"] = LABEL_TO_BASIS.get(rec.get("basis"), rec.get("basis"))
         project["layers"] = recs
 
+    with st.expander("7b. Konstrukciju tipi un to materiālu receptes (AD)", expanded=False):
+        st.caption("Tipu režīmā (ārsienas/iekšsienas/jumts) slāņus dod konstrukciju tipu receptes: vairākas latojuma kārtas, plāksnes, siltinājums, apdares un stiprinājumu "
+                   "normas pa tipiem. Tipa laukums = piesaistīto posmu neto laukumi. CLT slānis tikai norāda posma CLT biezumu (materiāla rindu veido CLT recepte — nav "
+                   "dubultošanas). Normas/cenas NAV izdomātas: tukšs = «nav ievadīts». Manuālais režīms (globālie slāņi, sadaļa 7) paliek.")
+        modes = ["Manuāli: globālie slāņi (sadaļa 7)", "Pēc konstrukciju tipiem (7b)"]
+        picked = st.radio("Slāņu režīms ārsienām/iekšsienām/jumtam", modes, index=1 if project.get("layers_mode") == "types" else 0, key=f"bp_lmode_{ver}")
+        project["layers_mode"] = "types" if picked == modes[1] else "manual"
+        _table(project, "construction_types", ["code", "name", "applies_to", "source"], {
+            "code": st.column_config.TextColumn("Kods"), "name": st.column_config.TextColumn("Nosaukums"),
+            "applies_to": st.column_config.SelectboxColumn("Attiecas uz", options=list(TYPE_APPLIES)),
+            "source": st.column_config.TextColumn("Avots")})
+        _table(project, "type_recipes", ["enabled", "type", "name", "kind", "unit", "thickness_mm", "step_mm", "norm", "article", "spec", "waste_pct", "pack_size",
+                                          "approved", "detail", "assumption", "source"], {
+            "enabled": st.column_config.CheckboxColumn("Ieskaitīt"), "type": st.column_config.TextColumn("Tips"),
+            "name": st.column_config.TextColumn("Slānis"), "kind": st.column_config.SelectboxColumn("Veids", options=TYPE_KINDS),
+            "unit": st.column_config.TextColumn("Vienība (m²/m³/m/gab.)"),
+            "thickness_mm": st.column_config.NumberColumn("Biezums (mm)", min_value=0.0), "step_mm": st.column_config.NumberColumn("Solis (mm)", min_value=0.0),
+            "norm": st.column_config.NumberColumn("Norma uz m² (reizinātājs/patēriņš)", min_value=0.0), "article": st.column_config.TextColumn("Artikuls"),
+            "spec": st.column_config.TextColumn("Specifikācija"), "waste_pct": st.column_config.NumberColumn("Rezerve %", min_value=0.0),
+            "pack_size": st.column_config.NumberColumn("Iepakojums", min_value=0.0), "approved": st.column_config.CheckboxColumn("Apstiprināts"),
+            "detail": st.column_config.SelectboxColumn("Detalizācija", options=DETAIL_LEVELS), "assumption": st.column_config.TextColumn("AD pieņēmums"),
+            "source": st.column_config.TextColumn("Avots")}, numeric=("thickness_mm", "step_mm", "norm", "waste_pct", "pack_size"),
+            boolean=("enabled", "approved"), bool_true=("enabled",))
+
     with st.expander("8. Receptes — patēriņa normas (stiprinājumi, lentes, MEP u.c.)", expanded=False):
         st.caption("Katra recepte: materiāls × PATĒRIŅA NORMA uz izvēlēto pamatu (m², m, gab.) VAI tiešs daudzums. Normas nav izdomātas: "
                    "tukša norma = «nav ievadīts». Artikuls (ja ir katalogā) aizpilda nosaukumu, specifikāciju, vienību un iepakojumu. "
                    "«Ražošanas posms» ir brīvs lauks — klasifikācija netiek izstrādāta.")
         recipes = pd.DataFrame(project.get("recipes") or [], columns=["id", "enabled", "group", "article", "name", "spec", "unit", "driver",
                                                                       "norm", "qty", "waste_pct", "pack_size", "module", "stage",
-                                                                      "approved", "source"])
+                                                                      "approved", "detail", "assumption", "cost_scope", "source"])
         recipes["driver"] = recipes["driver"].map(DRIVERS).fillna(recipes["driver"])
         for col in ("norm", "qty", "waste_pct", "pack_size"):
             recipes[col] = pd.to_numeric(recipes[col], errors="coerce")
+        _obj(recipes, ("enabled", "approved", "norm", "qty", "waste_pct", "pack_size"))
         recipes["enabled"] = recipes["enabled"].fillna(True).astype(bool)
         recipes["approved"] = recipes["approved"].fillna(False).astype(bool)
         edited = st.data_editor(recipes, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"bp_recipes_{ver}",
@@ -305,7 +383,11 @@ def render_building_mode():
             "waste_pct": st.column_config.NumberColumn("Rezerve % (tukšs = noklusējums)", min_value=0.0),
             "pack_size": st.column_config.NumberColumn("Iepakojums", min_value=0.0),
             "module": st.column_config.TextColumn("Modulis/telpa/sistēma"), "stage": st.column_config.TextColumn("Ražošanas posms"),
-            "approved": st.column_config.CheckboxColumn("Apstiprināts"), "source": st.column_config.TextColumn("Avots / pieņēmums")})
+            "approved": st.column_config.CheckboxColumn("Apstiprināts"),
+            "detail": st.column_config.SelectboxColumn("Detalizācija (AD: komplekts/norma)", options=DETAIL_LEVELS),
+            "assumption": st.column_config.TextColumn("AD pieņēmums (obligāts komplektam/normai)"),
+            "cost_scope": st.column_config.SelectboxColumn("Izmaksu segums", options=COST_SCOPES),
+            "source": st.column_config.TextColumn("Avots / pieņēmums")})
         recs = _records(edited, boolean=("enabled", "approved"))
         for rec in recs:
             rec["driver"] = LABEL_TO_DRIVER.get(rec.get("driver"), rec.get("driver") or "direct")
@@ -318,7 +400,10 @@ def render_building_mode():
         st.caption("Manuāla materiāla rinda neautomatizētam apjomam (vannasistaba, MEP materiāli u.c.) — marķēta «manuāli». "
                    "Darba stundas šeit NEievada (sadaļa 11), lai darbs netiktu ieskaitīts divreiz.")
         _table(project, "manual", ["group", "article", "material", "spec", "qty", "unit", "waste_pct", "pack_size", "module", "stage",
-                                   "approved", "source"], {
+                                   "approved", "detail", "assumption", "cost_scope", "source"], {
+            "detail": st.column_config.SelectboxColumn("Detalizācija", options=DETAIL_LEVELS),
+            "assumption": st.column_config.TextColumn("AD pieņēmums"),
+            "cost_scope": st.column_config.SelectboxColumn("Izmaksu segums", options=COST_SCOPES),
             "group": st.column_config.SelectboxColumn("Grupa", options=MANUAL_GROUPS),
             "article": st.column_config.TextColumn("Artikuls"), "material": st.column_config.TextColumn("Materiāls"),
             "spec": st.column_config.TextColumn("Specifikācija"),
@@ -344,6 +429,7 @@ def render_building_mode():
         ops["driver"] = ops["driver"].map(DRIVERS).fillna(ops["driver"])
         for col in ("qty", "norm_h", "hours", "rate_eur_h"):
             ops[col] = pd.to_numeric(ops[col], errors="coerce")
+        _obj(ops, ("enabled", "approved", "qty", "norm_h", "hours", "rate_eur_h"))
         ops["enabled"] = ops["enabled"].fillna(True).astype(bool)
         ops["approved"] = ops["approved"].fillna(False).astype(bool)
         edited = st.data_editor(ops, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"bp_ops_{ver}", column_config={
@@ -622,6 +708,9 @@ def _render_result(project, est):
                 st.write(f"• {label}: {est.areas[key]:g}")
     if est.excluded:
         st.error("**NAV IEKĻAUTS šajā tāmē:** " + "; ".join(est.excluded))
+
+    with st.expander("15. Prognozes versijas un faktiskā kontrole (lokāli)", expanded=False):
+        render_control(project, est, st.session_state.get(VER, 0), KEY, VER)
 
     st.markdown("**Lejupielādes**")
     xlsx = build_workbook(project, est)
