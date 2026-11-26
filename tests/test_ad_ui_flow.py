@@ -121,9 +121,9 @@ class TestForecastControlFlow(unittest.TestCase):
         self.assertFalse(at.exception, at.exception)
         expected = compare_to_actual(versions[0], parse_control_sheet("k.xlsx", build_control_xlsx())).totals
         labels = {m.label: m.value for m in at.metric}
-        self.assertEqual(labels["Materiāli: starpība (fakts − prognoze)"], f"{expected['materials_diff']:.2f} EUR")
-        self.assertEqual(labels["Ārējās izmaksas: starpība"], "350.00 EUR")                 # 4350 − 4000 (neatkarīgi)
-        self.assertEqual(labels["Stundas: starpība"], f"{expected['hours_diff']:.2f} h")
+        self.assertEqual(labels["Materiāli (sasaistītie): starpība (fakts − prognoze)"], f"{expected['materials_diff']:.2f} EUR")
+        self.assertEqual(labels["Ārējās izmaksas (sasaistītās): starpība"], "350.00 EUR")                 # 4350 − 4000 (neatkarīgi)
+        self.assertEqual(labels["Stundas (sasaistītie posmi): starpība"], f"{expected['hours_diff']:.2f} h")
 
     def test_importing_actuals_does_not_change_forecast_or_estimate(self):
         at = building_app()

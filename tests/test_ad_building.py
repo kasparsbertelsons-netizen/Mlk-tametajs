@@ -193,18 +193,20 @@ class TestApply(unittest.TestCase):
         self.assertEqual(p["floor_net_m2"], 72.0)
         self.assertIsNone(p["ceiling_m2"])
 
-    def test_add_mode_does_not_duplicate_and_keeps_manual_data(self):
+    def test_add_mode_does_not_duplicate_same_source_and_keeps_manual_data(self):
         scan = scan_ad_building(build_ad_building_pdf())
         p = empty_project("T", "clt")
         p["modules"] = [{"name": "Mans modulis", "length_mm": 12000, "width_mm": 4000, "axes": "", "confirmed": False}]
         ids = [c.id for c in scan.candidates if c.confidence != LOW]
-        apply_candidates(p, scan, ids)
-        self.assertEqual(len(p["modules"]), 2)                            # 12000×4000 jau bija → izlaists; pievienots tikai 8000×4000
+        rep = apply_candidates(p, scan, ids)
+        self.assertEqual(len(p["modules"]), 3)                            # identitāte NAV izmērs: manuālais modulis netiek zaudēts/aizstāts
         self.assertEqual(p["modules"][0]["name"], "Mans modulis")
+        self.assertTrue(any("sakrīt ar esošo moduli «Mans modulis»" in n for n in rep.notes))
         n_walls = len(p["ext_walls"])
-        rep = apply_candidates(p, scan, ids)                              # atkārtota pārnese nedublē
+        rep2 = apply_candidates(p, scan, ids)                             # atkārtota pārnese no TĀ PAŠA avota nedublē
+        self.assertEqual(len(p["modules"]), 3)
         self.assertEqual(len(p["ext_walls"]), n_walls)
-        self.assertTrue(rep.skipped)
+        self.assertTrue(any("jau ir pārnests" in why for _i, why in rep2.skipped))
 
     def test_replace_mode_replaces_only_chosen_categories(self):
         scan = scan_ad_building(build_ad_building_pdf())
@@ -363,6 +365,119 @@ class TestEstimateFromAd(unittest.TestCase):
         e = estimate(p)
         self.assertEqual(e.areas["openings_ext_m2"], before)
         self.assertTrue(any("dublikāts netiek skaitīts" in w for w in e.warnings))
+
+
+class TestIdenticalModules(unittest.TestCase):
+    """Datu integritāte (ChatGPT, PR #17): divi fiziski atšķirīgi moduļi ar VIENĀDIEM L/W netiek apvienoti."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tools.synthetic_ad_building import build_identical_modules_pdf
+        cls.pdf = build_identical_modules_pdf()
+        cls.scan = scan_ad_building(cls.pdf)
+        cls.ids = [c.id for c in cls.scan.candidates if c.kind == "module"]
+
+    def test_scan_gives_two_distinct_candidates_with_same_size(self):
+        mods = [c for c in self.scan.candidates if c.kind == "module"]
+        self.assertEqual([(m.data["length_mm"], m.data["width_mm"]) for m in mods], [(12000, 4000)] * 2)
+        keys = [m.data["source_key"] for m in mods]
+        self.assertEqual(len(set(keys)), 2)
+        self.assertTrue(all(k.startswith(self.scan.digest) for k in keys))
+
+    def test_both_identical_modules_are_transferred_with_unique_names(self):
+        p = empty_project("T")
+        rep = apply_candidates(p, self.scan, self.ids)
+        self.assertEqual(len(p["modules"]), 2)
+        self.assertEqual(len({m["name"] for m in p["modules"]}), 2)
+        self.assertEqual(len({m["source_key"] for m in p["modules"]}), 2)
+        self.assertEqual(len(rep.applied), 2)
+        self.assertTrue(any("ATSEVIŠĶS modulis" in n for n in rep.notes))                # brīdinājums pārbaudīt, bet nezaudē
+        self.assertEqual(estimate(p).areas["modules_confirmed"], 2)
+        self.assertAlmostEqual(estimate(p).areas["floor_frame_m2"], 2 * 12 * 4, 6)         # abu moduļu laukums
+
+    def test_reimport_of_same_source_does_not_duplicate(self):
+        p = empty_project("T")
+        apply_candidates(p, self.scan, self.ids)
+        rep = apply_candidates(p, self.scan, self.ids)
+        rescan = scan_ad_building(self.pdf)                                                 # tas pats PDF vēlreiz skenēts
+        rep2 = apply_candidates(p, rescan, [c.id for c in rescan.candidates if c.kind == "module"])
+        self.assertEqual(len(p["modules"]), 2)
+        self.assertEqual((len(rep.applied), len(rep2.applied)), (0, 0))
+
+    def test_other_pdf_with_same_size_is_a_different_source(self):
+        p = empty_project("T")
+        apply_candidates(p, self.scan, self.ids)
+        other = scan_ad_building(build_ad_building_pdf())                                   # cits PDF ar 12000×4000 moduli
+        apply_candidates(p, other, [c.id for c in other.candidates if c.kind == "module" and c.data["length_mm"] == 12000])
+        self.assertEqual(len(p["modules"]), 3)
+
+    def test_module_name_collisions_are_made_unique(self):
+        p = empty_project("T")
+        p["modules"] = [{"name": "Modulis P1-K1", "length_mm": 5000, "width_mm": 3000, "axes": "", "confirmed": True}]
+        apply_candidates(p, self.scan, self.ids)
+        self.assertEqual(len({m["name"] for m in p["modules"]}), 3)
+
+    def test_module_identity_survives_the_editor_round_trip_in_ui(self):
+        from pathlib import Path
+        from streamlit.testing.v1 import AppTest
+        app = str(Path(__file__).resolve().parent.parent / "app.py")
+        at = AppTest.from_file(app, default_timeout=120).run()
+        at.radio[0].set_value("Pilnas ēkas tāme").run()
+        at.file_uploader(key="bp_adpdf").upload("m.pdf", self.pdf, "application/pdf").run()
+        at.button(key="bp_adsafe_0").click().run()
+        at.button(key="bp_adapply_0").click().run()
+        mods = at.session_state["bp_project"]["modules"]
+        self.assertEqual(len(mods), 2)
+        self.assertTrue(all(m["source_key"] for m in mods))
+        at.run()                                                                            # papildu izpilde: moduļu tabula pārraksta projektu
+        mods2 = at.session_state["bp_project"]["modules"]
+        self.assertEqual([m["source_key"] for m in mods2], [m["source_key"] for m in mods])
+
+
+class TestRevitStyleNotation(unittest.TestCase):
+    """Droši nolasāmais no Revit tipa notācijas (SINTĒTISKS fragments); neskaidrais paliek manuāli."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tools.synthetic_ad_building import build_revit_style_pdf
+        cls.scan = scan_ad_building(build_revit_style_pdf())
+
+    def test_room_table_with_number_and_notes(self):
+        rooms = {r.data["name"]: r.data["area_m2"] for r in kinds(self.scan, "room")}
+        self.assertEqual(rooms, {"Kitchen": 14.0, "Living room": 30.0, "Bedroom": 12.0})
+        self.assertEqual(kinds(self.scan, "terrace")[0].data["area_m2"], 12.0)
+        net = kinds(self.scan, "floor_net")[0]
+        self.assertEqual(net.data["area_m2"], 56.0)                                      # telpu summa; terase un «Total Building Area» nav iekšā
+
+    def test_total_building_area_is_informational_and_never_applied_as_floor(self):
+        total = kinds(self.scan, "building_area")[0]
+        self.assertEqual(total.data["area_m2"], 80.0)
+        self.assertTrue(any("≠ neto grīdas platība" in n for n in total.notes))
+        p = empty_project("T")
+        rep = apply_candidates(p, self.scan, [total.id])
+        self.assertIsNone(p["floor_net_m2"])
+        self.assertTrue(any("informatīva" in why for _i, why in rep.skipped))
+
+    def test_window_marks_counts_from_plan_tags_and_unknown_counts_stay_empty(self):
+        ops = {o.data["name"]: o for o in kinds(self.scan, "opening")}
+        self.assertEqual((ops["W-1"].data["width_mm"], ops["W-1"].data["height_mm"], ops["W-1"].data["count"]), (1200, 1500, 3))
+        self.assertEqual((ops["RW-1"].data["count"], ops["RW-1"].data["wall"]), (1, "Jumts"))
+        self.assertIsNone(ops["W-2"].data["count"])                                       # nav marķējumu plānā → skaits manuāli
+        self.assertTrue(all(o.confidence == LOW for o in ops.values()))
+        self.assertTrue(any("ņemts no plāna marķējumiem" in i for i in ops["W-1"].issues))
+
+    def test_unclear_marks_are_not_transferred_but_roof_window_with_known_count_is(self):
+        p = empty_project("T")
+        rep = apply_candidates(p, self.scan, [c.id for c in self.scan.candidates])
+        why = dict(rep.skipped)
+        w1 = next(c.id for c in self.scan.candidates if c.kind == "opening" and c.data["name"] == "W-1")
+        w2 = next(c.id for c in self.scan.candidates if c.kind == "opening" and c.data["name"] == "W-2")
+        self.assertIn("atrašanās vieta", why[w1])                                         # ārējais/iekšējais nav norādīts
+        self.assertIn("atrašanās vieta", why[w2])
+        self.assertEqual([(o["name"], o["wall"], o["count"]) for o in p["openings"]], [("RW-1", "Jumts", 1)])
+
+    def test_english_roof_angle_in_degrees(self):
+        self.assertEqual(kinds(self.scan, "roof_angle")[0].data["angle_deg"], 20.0)
 
 
 class TestCommittedSamples(unittest.TestCase):

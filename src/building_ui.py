@@ -180,7 +180,8 @@ def render_building_mode():
         st.caption("Katrs modulis ir taisnstūris ar APSTIPRINĀTIEM L un W (mm). Atzīmē «Apstiprināts»; mainot L, W vai asis, "
                    "apstiprinājums tiek atcelts. Pastiprinājumu asis (nav obligāti): mm no moduļa gala, atdalītas ar atstarpi "
                    "(skat. docs/FLOOR_FRAME_REINFORCEMENT.md). Neapstiprināti moduļi netiek skaitīti.")
-        _table(project, "modules", ["name", "length_mm", "width_mm", "axes", "confirmed"], {
+        _table(project, "modules", ["name", "length_mm", "width_mm", "axes", "confirmed", "source_key"], {
+            "source_key": None,                                                  # moduļa avota identitāte (slēpta; netiek zaudēta rediģējot)
             "name": st.column_config.TextColumn("Modulis"),
             "length_mm": st.column_config.NumberColumn("L (mm)", min_value=0, step=100),
             "width_mm": st.column_config.NumberColumn("W (mm)", min_value=0, step=100),

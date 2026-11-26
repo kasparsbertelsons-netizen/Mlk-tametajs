@@ -71,7 +71,8 @@ def render_ad_import(project, ver, key_project, key_ver):
         report = apply_candidates(project, scan, accepted, mode="add" if mode.startswith("Pievienot") else "replace", ceiling_as_floor=ceiling,
                                   use_type_recipes=types)
         st.session_state["bp_notice"] = (f"Pārnesti {len(report.applied)} kandidāti. Izlaisti {len(report.skipped)}: "
-                                         + "; ".join(f"{i} ({why})" for i, why in report.skipped[:12]))
+                                         + "; ".join(f"{i} ({why})" for i, why in report.skipped[:12])
+                                         + ((" | PĀRBAUDI: " + " ".join(report.notes)) if report.notes else ""))
         st.session_state[key_project] = project
         st.session_state[key_ver] = st.session_state.get(key_ver, 0) + 1     # visi ievades lauki tiek atjaunoti no projekta (nevis no vecā widget stāvokļa)
         st.rerun()

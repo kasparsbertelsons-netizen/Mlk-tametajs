@@ -84,6 +84,8 @@ class ControlLine:
     plan_sum: object = None
     actual_sum: object = None
     scope: object = None           # materiāli | ārējās izmaksas | stundas | None (nav norādīts)
+    stage_code: str = ""           # (Moneo pārskats) posma kods
+    group: str = ""                # (Moneo pārskats) artikulu grupa
 
 
 @dataclass
@@ -94,6 +96,9 @@ class ControlSheet:
     reconciliation: list = field(default_factory=list)   # kopsummu pārbaude: {row_no, label, total_plan, sum_plan, total_actual, sum_actual, ok}
     columns: dict = field(default_factory=dict)
     fatal: bool = False
+    kind: str = "generic"                            # generic | moneo
+    project_heading: str = ""
+    layout_checks: list = field(default_factory=list)   # virsrakstu bloka atbilstības pārbaudes
 
     @property
     def items(self):
@@ -277,3 +282,310 @@ def _reconcile(sheet):
                 since = []
             if l.row_type == "stage_total":
                 since, stage_items = [], []
+
+
+# --- Moneo vispārīgā budžeta/faktiskā pārskata izkārtojums (kolonnu BURTI; Issue #16 korekcija) ---------------------------------------------
+# Struktūra (bez vērtībām): virsraksta rindas B=Kods, F=Apraksts (projekts/posms, posmi atkārtojas); virsrakstu bloks J/M/P/S/W/Z; artikulu rindas
+# E=kods, H=apraksts, I/K/N = budžeta daudzums/cena/summa, Q/T/V = faktiskais daudzums/cena/summa; grupu rindas D/G (kods/nosaukums) ar O/X summām;
+# posma kontrolsumma: F=<bez koda>, P/Z; atkārtota posma kopsumma: J=Kopā, P/Z. Tukšās rindas ignorē. Mērvienību nav (saglabā nezināmu).
+MONEO_LAYOUT = {"stage_code": "B", "stage_desc": "F", "group_code": "D", "group_name": "G", "code": "E", "desc": "H",
+                "plan_qty": "I", "plan_price": "K", "plan_sum": "N", "actual_qty": "Q", "actual_price": "T", "actual_sum": "V",
+                "group_plan_sum": "O", "group_actual_sum": "X", "stage_plan_sum": "P", "stage_actual_sum": "Z", "total_label": "J"}
+MONEO_LAYOUT_LABELS = {"stage_code": "Posma/projekta kods", "stage_desc": "Posma/projekta apraksts (un «<bez koda>»)", "group_code": "Grupas kods",
+                       "group_name": "Grupas nosaukums", "code": "Artikula kods", "desc": "Artikula apraksts", "plan_qty": "Budžeta daudzums",
+                       "plan_price": "Budžeta cena", "plan_sum": "Budžeta summa", "actual_qty": "Faktiskais daudzums", "actual_price": "Faktiskā cena",
+                       "actual_sum": "Faktiskā summa", "group_plan_sum": "Grupas budžeta summa", "group_actual_sum": "Grupas faktiskā summa",
+                       "stage_plan_sum": "Posma kontrolsumma (budžets)", "stage_actual_sum": "Posma kontrolsumma (fakts)", "total_label": "«Kopā» etiķete"}
+HEADER_BLOCK = {"J": ("budzets", "daudzums"), "M": ("cena",), "P": ("budzets", "summa"), "S": ("faktisk", "daudzums"), "W": ("cena",), "Z": ("faktisk", "summa")}
+NUMERIC_FIELDS = ("plan_qty", "plan_price", "plan_sum", "actual_qty", "actual_price", "actual_sum")
+
+
+def _col(letter):
+    from openpyxl.utils import column_index_from_string
+    return column_index_from_string(str(letter).strip().upper()) - 1
+
+
+def _cell(row, letter):
+    i = _col(letter)
+    return row[i] if i < len(row) else None
+
+
+def _text(value):
+    return "" if value is None else str(value).strip()
+
+
+def _is_num(value):
+    """Vai šūna izskatās pēc skaitļa (nederīgs teksts → False; to apstrādā virsrakstu bloka/rindu tipu noteikšana)."""
+    try:
+        return _num(value) is not None
+    except ValueError:
+        return False
+
+
+def detect_layout(filename, data: bytes) -> str:
+    """«moneo» — ja failā ir Moneo pārskata pazīmes (F=<bez koda> vai J=Kopā), citādi «generic»."""
+    try:
+        rows = _read_table(filename, data)
+    except Exception:
+        return "generic"
+    for row in rows[:5000]:
+        if _text(_cell(row, "F")).lower().startswith("<bez") or (_text(_cell(row, "J")).lower().startswith("kopā") and _is_num(_cell(row, "P"))):
+            return "moneo"
+    return "generic"
+
+
+def parse_moneo_report(filename, data: bytes, layout=None) -> ControlSheet:
+    """Moneo vispārīgā pārskata imports pēc kolonnu burtiem (`layout` — lietotāja kartējums, ja struktūra atšķiras). Artikulu rindas netiek jauktas ar grupu,
+    posma kontrolsummu un atkārtotām kopsummām; kopsummas NETIEK summētas, tikai saskaņotas."""
+    lay = {**MONEO_LAYOUT, **(layout or {})}
+    out = ControlSheet(kind="moneo")
+    out.columns = dict(lay)
+    if len(data) > MAX_BYTES:
+        out.errors.append((None, "fails ir lielāks par 8 MB"))
+        out.fatal = True
+        return out
+    try:
+        table = _read_table(filename, data)
+        for letter in lay.values():
+            _col(letter)
+    except Exception as error:
+        out.errors.append((None, f"faila nolasīšana vai kartējums neizdevās ({type(error).__name__}): {str(error)[:120]}"))
+        out.fatal = True
+        return out
+    if len(table) > MAX_ROWS + 1:
+        out.errors.append((None, f"fails satur vairāk nekā {MAX_ROWS} rindas"))
+        out.fatal = True
+        return out
+    headers, seen_header_texts = [], {}
+    stage_code = stage_desc = group = ""
+    items_seen = False
+    for offset, row in enumerate(table, 1):
+        if not any(v not in (None, "") and str(v).strip() for v in row):
+            continue                                                            # tukšās rindas ignorē
+        if any(str(v) == "=FORMULA" for v in row):
+            out.errors.append((offset, "rinda satur formulu: formulas netiek izpildītas — ievadi vērtību"))
+            continue
+        # virsrakstu bloks: teksts kolonnās J/M/P/S/W/Z bez skaitļiem
+        header_cells = {l: _text(_cell(row, l)) for l in HEADER_BLOCK}
+        nums = {f: _cell(row, lay[f]) for f in NUMERIC_FIELDS}
+        no_numbers = not any(_is_num(_cell(row, lay[f])) for f in NUMERIC_FIELDS + ("group_plan_sum", "group_actual_sum", "stage_plan_sum", "stage_actual_sum"))
+        if no_numbers and any(header_cells.values()) and not _text(_cell(row, lay["code"])) and not _text(_cell(row, lay["stage_code"])):
+            for l, t in header_cells.items():
+                if t:
+                    seen_header_texts[l] = (seen_header_texts.get(l, "") + " " + _norm(t)).strip()
+            continue
+        try:
+            vals = {f: _num(_cell(row, lay[f])) for f in NUMERIC_FIELDS}
+            g_plan, g_act = _num(_cell(row, lay["group_plan_sum"])), _num(_cell(row, lay["group_actual_sum"]))
+            s_plan, s_act = _num(_cell(row, lay["stage_plan_sum"])), _num(_cell(row, lay["stage_actual_sum"]))
+        except ValueError as error:
+            out.errors.append((offset, str(error)))
+            continue
+        total_label = _text(_cell(row, lay["total_label"])).lower()
+        f_text = _text(_cell(row, lay["stage_desc"]))
+        code = _text(_cell(row, lay["code"]))
+        desc = _text(_cell(row, lay["desc"]))
+        if total_label.startswith("kopā") and (s_plan is not None or s_act is not None):
+            out.lines.append(ControlLine(offset, "stage_total_repeat", stage=f"{stage_code} {stage_desc}".strip(), name="Kopā (atkārtots)", plan_sum=s_plan,
+                                         actual_sum=s_act, stage_code=stage_code))
+            continue
+        if f_text.lower().startswith("<bez") and (s_plan is not None or s_act is not None):
+            out.lines.append(ControlLine(offset, "stage_total", stage=f"{stage_code} {stage_desc}".strip(), name="Posma kontrolsumma", plan_sum=s_plan,
+                                         actual_sum=s_act, stage_code=stage_code))
+            continue
+        if code and any(v is not None for v in vals.values()):
+            if isinstance(_cell(row, lay["code"]), (int, float)) and not isinstance(_cell(row, lay["code"]), bool):
+                out.warnings.append((offset, f"artikula kods {code} ir skaitlis: sākuma nulles varēja zust — formatē kolonnu kā TEKSTU"))
+            out.lines.append(ControlLine(offset, "item", stage=f"{stage_code} {stage_desc}".strip(), code=code, name=desc, unit=None, plan_qty=vals["plan_qty"],
+                                         actual_qty=vals["actual_qty"], plan_price=vals["plan_price"], actual_price=vals["actual_price"], plan_sum=vals["plan_sum"],
+                                         actual_sum=vals["actual_sum"], scope=None, stage_code=stage_code, group=group))
+            items_seen = True
+            continue
+        if code:
+            out.warnings.append((offset, f"artikula rinda «{code[:24]}» bez skaitļiem ignorēta"))
+            continue
+        g_code, g_name = _text(_cell(row, lay["group_code"])), _text(_cell(row, lay["group_name"]))
+        if g_code or g_name:
+            group = f"{g_code} {g_name}".strip()
+            if g_plan is not None or g_act is not None:
+                out.lines.append(ControlLine(offset, "group_total", stage=f"{stage_code} {stage_desc}".strip(), name=group, plan_sum=g_plan, actual_sum=g_act,
+                                             stage_code=stage_code, group=group))
+            continue
+        b_text = _text(_cell(row, lay["stage_code"]))
+        if b_text and f_text and no_numbers:
+            headings_so_far = [l for l in out.lines if l.row_type == "stage_header"]
+            stage_code, stage_desc = b_text, f_text
+            out.lines.append(ControlLine(offset, "stage_header", stage=f"{b_text} {f_text}".strip(), code=b_text, name=f_text, stage_code=b_text))
+            group = ""
+            if not headings_so_far and not items_seen:
+                out.project_heading = f"{b_text} {f_text}".strip()            # pirmais virsraksts pirms pirmās artikulu rindas (vēlāk var izrādīties projekts)
+            continue
+        out.warnings.append((offset, "rinda neatbilst izkārtojumam (kartējums?) un ir ignorēta"))
+    # ja pirmais virsraksts ir PROJEKTS: otrs virsraksts seko bez artikuliem pa vidu
+    heads = [l for l in out.lines if l.row_type == "stage_header"]
+    if len(heads) >= 2:
+        first_idx, second_idx = out.lines.index(heads[0]), out.lines.index(heads[1])
+        if not any(l.row_type == "item" for l in out.lines[first_idx:second_idx]):
+            out.project_heading = heads[0].stage
+            out.lines[first_idx].row_type = "project_header"
+        else:
+            out.project_heading = ""
+    for letter, words in HEADER_BLOCK.items():
+        text = seen_header_texts.get(letter, "")
+        if not text:
+            out.layout_checks.append((letter, "virsrakstu bloka teksts nav atrasts"))
+        elif not all(w in text for w in words):
+            out.layout_checks.append((letter, f"virsraksts «{text[:40]}» neatbilst gaidītajam ({' + '.join(words)})"))
+    if out.layout_checks:
+        out.warnings.append((None, "virsrakstu bloks neatbilst gaidītajam kolonnu izkārtojumam: " + "; ".join(f"{l}: {m}" for l, m in out.layout_checks[:4])
+                             + " — pārbaudi kartējumu"))
+    if not out.items:
+        out.errors.append((None, "nav atrasta neviena artikula rinda: struktūra neatbilst izkārtojumam — pielāgo kolonnu kartējumu"))
+        out.fatal = True
+    _reconcile_moneo(out)
+    return out
+
+
+def _reconcile_moneo(sheet):
+    """Saskaņo: posma kontrolsumma (F=<bez koda>) pret artikulu rindām kopš iepriekšējās kontrolsummas; atkārtotā kopsumma pret kontrolsummu; grupu summas pret
+    artikuliem pēc grupas rindas. Nekas netiek summēts kopsummu dēļ."""
+    tol = 0.02 + 1e-6
+    since, last_stage_total, group_row, group_items = [], None, None, []
+
+    def close_group():
+        if group_row is not None:
+            sp = round(sum(x.plan_sum for x in group_items if x.plan_sum is not None), 2)
+            sa = round(sum(x.actual_sum for x in group_items if x.actual_sum is not None), 2)
+            ok = (group_row.plan_sum is None or abs(sp - group_row.plan_sum) <= tol) and (group_row.actual_sum is None or abs(sa - group_row.actual_sum) <= tol)
+            sheet.reconciliation.append({"row_no": group_row.row_no, "label": group_row.name, "type": "group_total", "total_plan": group_row.plan_sum, "sum_plan": sp,
+                                         "total_actual": group_row.actual_sum, "sum_actual": sa, "ok": ok})
+            if not ok:
+                sheet.warnings.append((group_row.row_no, f"grupas «{group_row.name[:30]}» summa neatbilst artikulu rindām (plāns {sp} / fakts {sa}): pārbaudi"))
+    for l in sheet.lines:
+        if l.row_type == "item":
+            since.append(l)
+            group_items.append(l)
+        elif l.row_type == "group_total":
+            close_group()
+            group_row, group_items = l, []
+        elif l.row_type == "stage_header":
+            close_group()
+            group_row, group_items = None, []
+        elif l.row_type == "stage_total":
+            close_group()
+            group_row, group_items = None, []
+            sp = round(sum(x.plan_sum for x in since if x.plan_sum is not None), 2)
+            sa = round(sum(x.actual_sum for x in since if x.actual_sum is not None), 2)
+            ok = (l.plan_sum is None or abs(sp - l.plan_sum) <= tol) and (l.actual_sum is None or abs(sa - l.actual_sum) <= tol)
+            sheet.reconciliation.append({"row_no": l.row_no, "label": l.stage, "type": "stage_total", "total_plan": l.plan_sum, "sum_plan": sp,
+                                         "total_actual": l.actual_sum, "sum_actual": sa, "ok": ok})
+            if not ok:
+                sheet.warnings.append((l.row_no, f"posma «{l.stage[:30]}» kontrolsumma neatbilst artikulu rindu summai (plāns {sp} / fakts {sa}): pārbaudi eksportu; "
+                                                 "kontrolsumma NETIEK izmantota summēšanā"))
+            last_stage_total, since = l, []
+        elif l.row_type == "stage_total_repeat":
+            ok = last_stage_total is not None and (l.plan_sum is None or last_stage_total.plan_sum is None or abs(l.plan_sum - last_stage_total.plan_sum) <= tol) \
+                and (l.actual_sum is None or last_stage_total.actual_sum is None or abs(l.actual_sum - last_stage_total.actual_sum) <= tol)
+            sheet.reconciliation.append({"row_no": l.row_no, "label": l.stage + " (atkārtota kopsumma)", "type": "stage_total_repeat", "total_plan": l.plan_sum,
+                                         "sum_plan": last_stage_total.plan_sum if last_stage_total else None, "total_actual": l.actual_sum,
+                                         "sum_actual": last_stage_total.actual_sum if last_stage_total else None, "ok": ok})
+            if not ok:
+                sheet.warnings.append((l.row_no, "atkārtotā posma kopsumma («Kopā») neatbilst posma kontrolsummai"))
+    close_group()
+    if since:
+        sheet.warnings.append((None, f"{len(since)} artikulu rindas nav aptvertas ar posma kontrolsummu (nav F=<bez koda> rindas)"))
+
+
+# --- Stundu pārskats: 2 rindu virsraksts (A=Darbība, B=Stundas; nākamajā rindā B=Reāli, C=Plānots), A=operācija, A=Kopā: kontrolsumma -------------
+HOURS_LAYOUT = {"name": "A", "actual": "B", "plan": "C"}
+
+
+@dataclass
+class HoursOp:
+    row_no: int
+    name: str
+    actual: object
+    plan: object
+
+
+@dataclass
+class HoursReport:
+    operations: list = field(default_factory=list)
+    total_actual: object = None                      # «Kopā:» rinda: KONTROLSUMMA, nevis operācija
+    total_plan: object = None
+    errors: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    reconciliation: dict = field(default_factory=dict)
+    layout: dict = field(default_factory=dict)
+    fatal: bool = False
+
+
+def parse_hours_report(filename, data: bytes, layout=None) -> HoursReport:
+    out = HoursReport()
+    lay = {**HOURS_LAYOUT, **(layout or {})}
+    out.layout = dict(lay)
+    if len(data) > MAX_BYTES:
+        out.errors.append((None, "fails ir lielāks par 8 MB"))
+        out.fatal = True
+        return out
+    try:
+        table = _read_table(filename, data)
+        cols = {k: _col(v) for k, v in lay.items()}
+    except Exception as error:
+        out.errors.append((None, f"faila nolasīšana vai kartējums neizdevās ({type(error).__name__}): {str(error)[:120]}"))
+        out.fatal = True
+        return out
+    non_empty = [(i, r) for i, r in enumerate(table, 1) if any(v not in (None, "") and str(v).strip() for v in r)]
+    start = next((k for k, (_i, r) in enumerate(non_empty) if _norm(r[cols["name"]] if cols["name"] < len(r) else "").startswith("darbiba")), None)
+    if start is None:
+        out.errors.append((None, "nav atrasts virsraksts «Darbība» (A kolonnā): pārbaudi kartējumu"))
+        out.fatal = True
+        return out
+    actual_col, plan_col = cols["actual"], cols["plan"]
+    body_from = start + 1
+    if start + 1 < len(non_empty):
+        r2 = non_empty[start + 1][1]
+        labels = {j: _norm(v) for j, v in enumerate(r2) if v not in (None, "")}
+        a = next((j for j, t in labels.items() if t.startswith(("reali", "fakt"))), None)
+        p = next((j for j, t in labels.items() if t.startswith("planot")), None)
+        if a is not None and p is not None:
+            actual_col, plan_col, body_from = a, p, start + 2                  # kolonnu lomas nosaka 2. virsraksta rinda (Reāli/Plānots)
+        else:
+            out.warnings.append((non_empty[start + 1][0], "otrajā virsraksta rindā nav «Reāli»/«Plānots»: izmantots kartējums (faktiskās=B, plānotās=C)"))
+    for rno, row in non_empty[body_from:]:
+        name = _text(row[cols["name"]]) if cols["name"] < len(row) else ""
+        if any(str(v) == "=FORMULA" for v in row):
+            out.errors.append((rno, "rinda satur formulu: formulas netiek izpildītas — ievadi vērtību"))
+            continue
+        try:
+            actual = _num(row[actual_col]) if actual_col < len(row) else None
+            plan = _num(row[plan_col]) if plan_col < len(row) else None
+        except ValueError as error:
+            out.errors.append((rno, str(error)))
+            continue
+        if _norm(name).startswith("kopa"):
+            out.total_actual, out.total_plan = actual, plan                       # kontrolsumma, NE operācija
+            continue
+        if not name:
+            out.warnings.append((rno, "rinda bez operācijas nosaukuma ignorēta"))
+            continue
+        if actual is None and plan is None:
+            out.warnings.append((rno, f"operācija «{name[:30]}» bez stundām ignorēta"))
+            continue
+        out.operations.append(HoursOp(rno, name, actual, plan))
+    names = [_norm(o.name) for o in out.operations]
+    dups = sorted({n for n in names if names.count(n) > 1})
+    if dups:
+        out.warnings.append((None, "atkārtotas operācijas (tiks agregētas salīdzināšanā, avota rindas saglabātas): " + ", ".join(dups[:5])))
+    sa = round(sum(o.actual for o in out.operations if o.actual is not None), 4)
+    sp = round(sum(o.plan for o in out.operations if o.plan is not None), 4)
+    ok_a = out.total_actual is None or abs(sa - out.total_actual) <= 0.01 + 1e-6
+    ok_p = out.total_plan is None or abs(sp - out.total_plan) <= 0.01 + 1e-6
+    out.reconciliation = {"sum_actual": sa, "sum_plan": sp, "total_actual": out.total_actual, "total_plan": out.total_plan, "ok": ok_a and ok_p,
+                          "has_total": out.total_actual is not None or out.total_plan is not None}
+    if not out.reconciliation["ok"]:
+        out.warnings.append((None, f"«Kopā:» kontrolsumma neatbilst operāciju summai (fakts {sa} / plāns {sp}): pārbaudi; kontrolsumma netiek izmantota summēšanā"))
+    if not out.operations:
+        out.errors.append((None, "nav atrasta neviena operācija"))
+        out.fatal = True
+    return out

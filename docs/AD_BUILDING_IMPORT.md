@@ -55,3 +55,21 @@ Atpazīšana nav validēta uz reāliem AD rasējumiem; neatpazītais jāievada m
 
 ## Sintētiskie paraugi un DEMO
 `python -m tools.synthetic_ad_building --out samples/ad_building` → `AD_sintetiska_eka.pdf`, `kontroltame_sintetiska.xlsx/.csv`. Poga **«Ielādēt AD demonstrāciju»** izveido pilnībā cenotu projektu no šī PDF.
+
+## Korekcija pēc ChatGPT pārbaudes (PR #17)
+**Datu integritāte**
+- **Moduļa identitāte nav izmērs.** Divi fiziski atšķirīgi moduļi ar vienādiem L/W tiek pārnesti abi (identitāte = PDF kontrolsumma + lappuse + kontūra/pozīcija = `source_key`);
+  atkārtoti importējot to pašu avota kandidātu, modulis netiek dublēts; vienāda izmēra modulis bez šīs atslēgas (piem., manuāli ievadīts) netiek zaudēts — rāda brīdinājumu pārbaudei.
+- **Salīdzināšana nedubulto prognozi.** Gan faktiskās, gan prognozes rindas vispirms tiek **agregētas pa artikulu + izmaksu segumu** (artikuls, kas izmantots vairākos posmos, netiek salīdzināts ar visu prognozes
+  summu katru reizi); avota rindas saglabātas (`sources`). **Posmu sadalījums** tiek dots tikai tad, ja KATRAI prognozes un faktiskajai rindai ir posms; citādi — pa artikulu kopā.
+  Atsevišķi tiek uzrādītas **sasaistīto rindu** starpības un **visa tvēruma** kopsummas (ar nesasaistītajām rindām: prognoze, fakts, starpība, nesasaistītais apjoms, pārklājums %).
+  Sasaistīto rindu novirze NAV visas ēkas precizitāte.
+
+**Moneo un stundu imports (pēc norādītās Excel STRUKTŪRAS; sintētiska kopija testiem)**
+- Moneo pārskats (kolonnu burti): virsraksta rindas B=Kods, F=Apraksts (projekts/posms, posmi atkārtojas); virsrakstu bloks J/M/P/S/W/Z; artikulu rindas E=kods, H=apraksts, I/K/N=budžeta daudzums/cena/summa,
+  Q/T/V=faktiskais daudzums/cena/summa; grupu rindas D/G ar O/X summām; posma kontrolsumma F=`<bez koda>`, P/Z; atkārtota kopsumma J=Kopā, P/Z. Tukšās rindas ignorē; mērvienību nav (nezināma).
+  Artikulu summas tiek saskaņotas ar posmu kontrolsummām (un grupu summām), nekas netiek summēts divreiz. **Importa priekšskatījums un lietotāja kolonnu kartējums**, ja struktūra atšķiras.
+- Stundu pārskats: 2 rindu virsraksts (A=Darbība, B=Stundas; nākamajā rindā B=Reāli, C=Plānots — kolonnas nosaka šī rinda), A=operācija, `Kopā:` = kontrolsumma. Salīdzina pa **operācijām** ar fiksētās prognozes
+  darba operācijām (atšķirīgus nosaukumus kartē lietotājs); atkārtotas operācijas agregē.
+- AD notācijas fragmenti (Revit tipa, sintētiski): telpu tabula Nr./Name/Area/Notes, «Total Building Area on Ground» (informatīvi, NAV neto grīda), logu marķējumi `W-n`/`RW-n` ar «platums x augstums mm»
+  (skaits — no plāna marķējumiem; bez tā — manuāli), jumta leņķis grādos. Neskaidrais netiek pārnests.

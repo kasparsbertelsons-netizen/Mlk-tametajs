@@ -13,6 +13,7 @@ Atpazīšana ir balstīta uz TEKSTA KONVENCIJĀM (sk. `docs/AD_BUILDING_IMPORT.m
 atšķirties — atpazīšanas pielaides ir prototipa pielaides. Ārējā fasādes kontūra netiek sajaukta ar pamatrāmi un NETIEK izsecināta nobīde.
 Datu apjoma ierobežojumi: ≤ 100 lapas, ≤ 30 MB.
 """
+import hashlib
 import math
 import re
 from dataclasses import dataclass, field
@@ -29,21 +30,24 @@ HIGH, MEDIUM, LOW = "augsta", "vidēja", "zema"
 NUM = r"\d+(?:[.,]\d+)?"
 
 K_MODULE, K_FACADE, K_ROOM, K_TERRACE, K_FLOOR_NET = "module", "facade_contour", "room", "terrace", "floor_net"
+K_BUILDING_AREA = "building_area"
 K_CEILING_H, K_WALL, K_GABLE, K_OPENING, K_SLOPE, K_TYPE, K_ROOF_ANGLE = ("ceiling_height", "wall", "gable", "opening", "roof_slope",
                                                                          "construction_type", "roof_angle")
 KIND_LABELS = {K_MODULE: "Modulis (L×W)", K_FACADE: "Fasādes kontūra (NAV pamatrāmis)", K_ROOM: "Telpa", K_TERRACE: "Terase",
                K_FLOOR_NET: "Neto grīdas platība", K_CEILING_H: "Telpas augstums", K_WALL: "Sienas posms", K_GABLE: "Zelmiņš",
-               K_OPENING: "Atvere", K_SLOPE: "Jumta slīpne", K_TYPE: "Konstrukcijas tips", K_ROOF_ANGLE: "Jumta slīpums (informatīvi)"}
+               K_BUILDING_AREA: "Ēkas platība uz zemes (informatīvi)", K_OPENING: "Atvere", K_SLOPE: "Jumta slīpne", K_TYPE: "Konstrukcijas tips", K_ROOF_ANGLE: "Jumta slīpums (informatīvi)"}
 
 WALL_RE = re.compile(r"^\s*siena\b", re.I)
 GABLE_RE = re.compile(r"^\s*zelmi[ņn]š\b", re.I)
 SLOPE_RE = re.compile(r"^\s*jumta\s+slīpne\b", re.I)
-ROOF_ANGLE_RE = re.compile(r"jumta\s+slīpums\s*[:=]?\s*(" + NUM + r")\s*°", re.I)
+ROOF_ANGLE_RE = re.compile(r"(?:jumta\s+slīpums|roof\s+(?:angle|pitch|slope))\s*[:=]?\s*(" + NUM + r")\s*(?:°|deg)", re.I)
+BUILDING_AREA_RE = re.compile(r"total\s+building\s+area(?:\s+on\s+ground)?\s*[:=]?\s*(" + NUM + r")\s*m\s*[2²]", re.I)
+MARK_RE = re.compile(r"^\s*(?P<code>R?W-\d+)\s+(?P<w>\d{3,4})\s*[x×]\s*(?P<h>\d{3,4})\s*(?:mm)?\s*(?P<rest>.*)$")      # Revit logu marķējumi W-n / RW-n
 CEIL_RE = re.compile(r"(?:telpas|griestu)\s+augstums\s*[:=]?\s*(" + NUM + r")\s*(mm|m)\b", re.I)
-ROOM_RE = re.compile(r"^\s*(?P<name>[^\d\n]{3,48}?)\s+(?P<area>" + NUM + r")\s*m\s*[2²]\s*$", re.I)
+ROOM_RE = re.compile(r"^\s*(?:(?P<nr>\d{1,3})[.)]?\s+)?(?P<name>[^\d\n]{3,48}?)\s+(?P<area>" + NUM + r")\s*m\s*[2²](?P<notes>\s+\S.*)?\s*$", re.I)    # Nr. Name Area Notes
 FLOOR_TOTAL_RE = re.compile(r"neto|kopā|kopsumma|iekštelpu|summa", re.I)
 OPENING_RE = re.compile(r"^\s*(?P<code>[A-ZĀČĒĢĪĶĻŅŠŪŽ]{1,3}\d+)\s+(?P<w>\d{3,4})\s*[x×]\s*(?P<h>\d{3,4})\s*(?:mm)?\s+(?P<n>\d+)\s*gab\.?(?P<rest>.*)$")
-TAG_RE = re.compile(r"^\s*(?P<code>[A-ZĀČĒĢĪĶĻŅŠŪŽ]{1,3}\d+)\s*$")
+TAG_RE = re.compile(r"^\s*(?P<code>[A-ZĀČĒĢĪĶĻŅŠŪŽ]{1,3}-?\d+)\s*$")
 TYPE_RE = re.compile(r"^\s*(?P<code>[A-ZĀČĒĢĪĶĻŅŠŪŽ]{1,3}\d+)\s*[-–—:]?\s*(?P<what>Ārsiena|Iekšsiena|Jumts|Grīda)\s*:\s*(?P<layers>.+)$", re.I)
 MODULE_TEXT_RE = re.compile(r"(?:pamatrāmis|modulis)\s+(?P<name>\S+)\s+(?P<l>\d{4,5})\s*[x×]\s*(?P<w>\d{3,5})", re.I)
 FACADE_TEXT_RE = re.compile(r"(?:fasādes\s+kontūra|ārējais\s+gabarīts)\s+(?P<l>\d{4,5})\s*[x×]\s*(?P<w>\d{3,5})", re.I)
@@ -77,6 +81,7 @@ class BuildingScan:
     pages: list = field(default_factory=list)       # [{"page", "kind", "chars"}]
     notes: list = field(default_factory=list)
     vector: dict = field(default_factory=dict)
+    digest: str = ""                                 # PDF kontrolsumma: kandidāta avota atslēgas daļa (atkārtota importa atpazīšanai)
 
     def by_kind(self, kind):
         return [c for c in self.candidates if c.kind == kind]
@@ -129,6 +134,7 @@ def _loc_to_wall(rest, code):
 def scan_ad_building(data: bytes) -> BuildingScan:
     """Skenē AD PDF un atgriež kandidātus ar lappusi/avotu/pārliecību/pierādījumu. Neko neraksta tāmē."""
     scan = BuildingScan()
+    scan.digest = hashlib.sha256(data).hexdigest()[:12]
     if not data.startswith(b"%PDF"):
         raise ValueError("Fails nav atpazīts kā PDF.")
     if len(data) > MAX_BYTES:
@@ -169,6 +175,15 @@ def scan_ad_building(data: bytes) -> BuildingScan:
             if tag and is_floor:
                 tag_counts[tag.group("code")] = tag_counts.get(tag.group("code"), 0) + 1
                 continue
+            m = BUILDING_AREA_RE.search(line)
+            if m:
+                add(K_BUILDING_AREA, f"Ēkas platība uz zemes {_n(m.group(1)):g} m²", {"area_m2": _n(m.group(1))}, page_no, "teksts", MEDIUM, line,
+                    notes=["Bruto platība uz zemes ≠ neto grīdas platība: netiek izmantota; neto platību dod telpu laukumi."])
+                continue
+            m = MARK_RE.match(line)
+            if m:
+                _parse_mark(m, line, page_no, add, seen_openings)
+                continue
             m = CEIL_RE.search(line)
             if m:
                 mm_val = _to_mm(_n(m.group(1)), m.group(2))
@@ -183,7 +198,8 @@ def scan_ad_building(data: bytes) -> BuildingScan:
             m = MODULE_TEXT_RE.search(line)
             if m:
                 add(K_MODULE, f"Modulis {m.group('name')} {m.group('l')}×{m.group('w')} mm",
-                    {"name": f"Modulis {m.group('name')}", "length_mm": int(m.group("l")), "width_mm": int(m.group("w"))}, page_no, "teksts", MEDIUM,
+                    {"name": f"Modulis {m.group('name')}", "length_mm": int(m.group("l")), "width_mm": int(m.group("w")),
+                     "source_key": f"{scan.digest}:{page_no}:t:{m.group('name')}:{m.group('l')}x{m.group('w')}"}, page_no, "teksts", MEDIUM,
                     line, notes=["Izmēri nolasīti no teksta; vektoru ģeometrijas apstiprinājums var nebūt."])
                 continue
             if TYPE_RE.match(line):
@@ -217,6 +233,16 @@ def scan_ad_building(data: bytes) -> BuildingScan:
                         notes=["Terase netiek ieskaitīta iekštelpu platībā."])
                 else:
                     room_cands.append(add(K_ROOM, f"{name} {area:g} m²", {"name": name, "area_m2": area}, page_no, "teksts", HIGH, line))
+    # Revit marķējumi bez skaita: skaits no plāna marķējumiem (ja tādi ir), citādi jānorāda manuāli
+    for entry in seen_openings.values():
+        c = entry["cand"]
+        if c.data.get("count") is None:
+            tags = tag_counts.get(c.data["name"])
+            if tags:
+                c.data["count"] = tags
+                c.label = c.label.replace("×?", f"×{tags}")
+                c.issues.append(f"Skaits ({tags}) ņemts no plāna marķējumiem «{c.data['name']}»; specifikācijā skaita nav — pārbaudi.")
+                c.status = "jāpārbauda"
     # atveru skaita atbilstība plāna marķējumiem (Σ pa artikula kodu)
     totals = {}
     for entry in seen_openings.values():
@@ -224,6 +250,8 @@ def scan_ad_building(data: bytes) -> BuildingScan:
         totals.setdefault(c.data["name"], []).append(c)
     for code, cands in totals.items():
         tags = tag_counts.get(code)
+        if any(c.data["count"] is None for c in cands):
+            continue                                              # skaits nav zināms: nav ko salīdzināt
         total = sum(c.data["count"] for c in cands)
         if tags is not None and tags != total:
             cands[0].issues.append(f"Specifikācijā kopā {total} gab., bet plānā atrasti {tags} marķējumi «{code}» — pārbaudi.")
@@ -251,7 +279,8 @@ def scan_ad_building(data: bytes) -> BuildingScan:
                     conf = LOW
                 add(K_MODULE, f"Modulis (vektors) {c['length_mm']}×{c['width_mm']} mm",
                     {"name": f"Modulis {c['id']}", "length_mm": c["length_mm"], "width_mm": c["width_mm"], "status": c["status"],
-                     "scale": (c.get("scale") or {}).get("denominator")}, page["page"], "vektors", conf,
+                     "scale": (c.get("scale") or {}).get("denominator"),
+                     "source_key": f"{scan.digest}:{page['page']}:v:{c['id']}:{round(c['bbox_pt'][0])}:{round(c['bbox_pt'][1])}"}, page["page"], "vektors", conf,
                     f"Vektoru kontūra {c['id']}: {c['status']}; " + (c["evidence"][-1] if c.get("evidence") else ""), issues)
     if not scan.candidates:
         scan.notes.append("Nav atpazīts neviens lauks: PDF var būt attēls vai citāda notācija. Visi dati jāievada manuāli.")
@@ -338,6 +367,22 @@ def _parse_opening(m, line, page, add, seen):
     seen[key] = {"cand": cand}
 
 
+def _parse_mark(m, line, page, add, seen):
+    code, w, h = m.group("code"), int(m.group("w")), int(m.group("h"))
+    roof = code.startswith("RW")
+    key = (code, w, h, "", "Jumts" if roof else None)
+    if key in seen:
+        seen[key]["cand"].notes.append(f"Marķējums «{code}» atkārtojas lappusē {page}: dublikāts ignorēts.")
+        return
+    issues = ["Skaits nav norādīts rindā (tiks mēģināts no plāna marķējumiem)."]
+    if not roof:
+        issues.append("Atrašanās vieta (ārējais/iekšējais) nav norādīta: jāizvēlas manuāli.")
+    cand = add(K_OPENING, f"Logs {code} {w}×{h} ×? ({'jumts' if roof else '?'})", {
+        "name": code, "kind": "Logs", "width_mm": w, "height_mm": h, "count": None, "wall": "Jumts" if roof else None, "segment": ""},
+        page, "teksts", LOW, line, issues)
+    seen[key] = {"cand": cand}
+
+
 def _parse_type(line, page, add):
     m = TYPE_RE.match(line)
     code, what, layers_text = m.group("code"), m.group("what").lower(), m.group("layers")
@@ -360,6 +405,7 @@ def _parse_type(line, page, add):
 class ApplyReport:
     applied: list = field(default_factory=list)           # (kandidāta ID, apraksts)
     skipped: list = field(default_factory=list)           # (kandidāta ID, iemesls)
+    notes: list = field(default_factory=list)             # brīdinājumi, kas jāpārbauda (piem., vienāda izmēra modulis)
 
 
 def _prov(project, cand, field_name, note=""):
@@ -398,12 +444,24 @@ def apply_candidates(project: dict, scan: BuildingScan, accepted_ids, *, mode="a
             pass                                           # nepilnus kandidātus pārbauda zemāk pēc konkrētiem laukiem
         src = f"{label} lpp. {c.page}, {c.source}, pārliecība {c.confidence}, apstiprināts"
         if c.kind == K_MODULE:
-            existing = {(m.get("length_mm"), m.get("width_mm")) for m in project.get("modules", [])}
-            if (d["length_mm"], d["width_mm"]) in existing:
-                report.skipped.append((c.id, "modulis ar tādiem pašiem L/W jau ir"))
+            # Moduļa identitāte = avota kandidāts (PDF + lappuse + kontūra/pozīcija), NE izmērs: divi fiziski atšķirīgi moduļi ar vienādiem L/W
+            # abi tiek pārnesti; atkārtoti importējot to pašu avota kandidātu, modulis netiek dublēts.
+            mods = project.setdefault("modules", [])
+            if d.get("source_key") and any(m.get("source_key") == d["source_key"] for m in mods):
+                report.skipped.append((c.id, "šis avota kandidāts jau ir pārnests (modulis netiek dublēts)"))
                 continue
-            mod = {"name": d["name"], "length_mm": d["length_mm"], "width_mm": d["width_mm"], "axes": "", "confirmed": True}
-            project.setdefault("modules", []).append(mod)
+            same_size = [m.get("name") for m in mods if (m.get("length_mm"), m.get("width_mm")) == (d["length_mm"], d["width_mm"])]
+            if same_size:
+                report.notes.append(f"{c.id}: izmērs {d['length_mm']}×{d['width_mm']} sakrīt ar esošo moduli «{same_size[0]}»; pievienots kā ATSEVIŠĶS "
+                                    "modulis (identitāte nav izmērs) — pārbaudi, vai tas nav dublikāts.")
+            name = d["name"]
+            taken = {m.get("name") for m in mods}
+            n = 2
+            while name in taken:
+                name, n = f"{d['name']} ({n})", n + 1
+            mod = {"name": name, "length_mm": d["length_mm"], "width_mm": d["width_mm"], "axes": "", "confirmed": True,
+                   "source_key": d.get("source_key", "")}
+            mods.append(mod)
             project.setdefault("module_fp", {})[str(len(project["modules"]) - 1)] = module_fp(mod)
             _prov(project, c, "modules")
             report.applied.append((c.id, c.label))
@@ -453,6 +511,9 @@ def apply_candidates(project: dict, scan: BuildingScan, accepted_ids, *, mode="a
         elif c.kind == K_OPENING:
             if d["wall"] is None:
                 report.skipped.append((c.id, "atrašanās vieta nav norādīta: izvēlies manuāli"))
+                continue
+            if not d.get("count"):
+                report.skipped.append((c.id, "skaits nav nolasīts: ievadi manuāli"))
                 continue
             ops = project.setdefault("openings", [])
             if any(o.get("name") == d["name"] and o.get("width_mm") == d["width_mm"] and o.get("height_mm") == d["height_mm"]
