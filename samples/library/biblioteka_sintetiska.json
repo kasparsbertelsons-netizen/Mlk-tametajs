@@ -1,0 +1,663 @@
+{
+ "app": "mlk-tametajs-biblioteka",
+ "checksum": "923d3212ded8201bf6e61421095fd667817ff6ea30e660f8e54dc85c4c59cde2",
+ "data": {
+  "catalog": [
+   {
+    "article": "SINT-LENTE",
+    "name": "Hermetizācijas lente (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "m",
+    "unit_price": 1.8
+   },
+   {
+    "article": "SINT-LENSKAVA",
+    "name": "Leņķskava (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 1.5
+   },
+   {
+    "article": "SINT-EL-NORMA",
+    "name": "Elektroinstalācijas materiāli (EUR/m²) (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "m²",
+    "unit_price": 36.0
+   },
+   {
+    "article": "SINT-HIDRO",
+    "name": "Mitrās telpas hidroizolācija (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "kompl.",
+    "unit_price": 210.0
+   },
+   {
+    "article": "SINT-JLOGA-NOTEC",
+    "name": "Jumta loga apdare un noteces (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "kompl.",
+    "unit_price": 85.0
+   },
+   {
+    "article": "SINT-VENT-KOMPL",
+    "name": "Ventilācijas komplekts (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "kompl.",
+    "unit_price": 3100.0
+   },
+   {
+    "article": "SINT-VIRT-STD",
+    "name": "Virtuves iekārta, standarta (EUR/m) (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "m",
+    "unit_price": 520.0
+   },
+   {
+    "article": "SINT-VIRT-AUGST",
+    "name": "Virtuves iekārta, augstāka (EUR/m) (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "m",
+    "unit_price": 780.0
+   },
+   {
+    "article": "SINT-PLITS-STD",
+    "name": "Plīts virsma, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 380.0
+   },
+   {
+    "article": "SINT-PLITS-AUGST",
+    "name": "Plīts virsma, augstāka (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 690.0
+   },
+   {
+    "article": "SINT-SINK-STD",
+    "name": "Virtuves jaucējkrāns, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 95.0
+   },
+   {
+    "article": "SINT-SINK-AUGST",
+    "name": "Virtuves jaucējkrāns, augstāks (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 210.0
+   },
+   {
+    "article": "SINT-WC-STD",
+    "name": "Tualetes pods, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 160.0
+   },
+   {
+    "article": "SINT-WC-AUGST",
+    "name": "Tualetes pods, augstāks (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 340.0
+   },
+   {
+    "article": "SINT-DUSA-STD",
+    "name": "Dušas komplekts, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 290.0
+   },
+   {
+    "article": "SINT-DUSA-AUGST",
+    "name": "Dušas komplekts, augstāks (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 640.0
+   },
+   {
+    "article": "SINT-LOGS-STD",
+    "name": "Logs 1200×1500, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 230.0
+   },
+   {
+    "article": "SINT-LOGS-AUGST",
+    "name": "Logs 1200×1500, augstāks (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 410.0
+   },
+   {
+    "article": "SINT-JLOGS-STD",
+    "name": "Jumta logs 780×1400, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 370.0
+   },
+   {
+    "article": "SINT-JLOGS-AUGST",
+    "name": "Jumta logs 780×1400, augstāks (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 560.0
+   },
+   {
+    "article": "SINT-ARDURVIS-STD",
+    "name": "Ārdurvis 1000×2100, standarta (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 400.0
+   },
+   {
+    "article": "SINT-ARDURVIS-AUGST",
+    "name": "Ārdurvis 1000×2100, augstākas (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 780.0
+   },
+   {
+    "article": "SINT-VECA-CENA",
+    "name": "Materiāls ar novecojušu cenu (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2024-01-01",
+    "price_valid_to": "2025-12-31",
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 99.0
+   },
+   {
+    "article": "SINT-NAKOTNE",
+    "name": "Materiāls ar nākotnes cenu (SINT.)",
+    "pack_size": null,
+    "price_source": "sintētisks cenrādis",
+    "price_valid_from": "2099-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": 77.0
+   },
+   {
+    "article": "SINT-BEZ-CENAS",
+    "name": "Materiāls bez cenas (SINT.)",
+    "pack_size": null,
+    "price_source": "",
+    "price_valid_from": "2026-01-01",
+    "price_valid_to": null,
+    "spec": "sintētisks",
+    "supplier": "Sintētisks piegādātājs",
+    "unit": "gab.",
+    "unit_price": null
+   }
+  ],
+  "kits": [
+   {
+    "assumption": "sintētisks: tipveida virtuve ar tehniku; modelis nav izvēlēts",
+    "code": "K-VIRTUVE",
+    "covers": [
+     "virtuve"
+    ],
+    "default_level": "standarta",
+    "group": "Virtuve, mēbeles un tehnika",
+    "levels": [
+     "standarta",
+     "augstāks"
+    ],
+    "name": "Virtuves komplekts",
+    "positions": [
+     {
+      "code": "iekarta",
+      "driver": "kitchen_len",
+      "name": "Virtuves iekārta (pēc garuma)",
+      "norm": 1.0,
+      "opening": null,
+      "options": {
+       "augstāks": "SINT-VIRT-AUGST",
+       "standarta": "SINT-VIRT-STD"
+      },
+      "qty": null,
+      "unit": "m"
+     },
+     {
+      "code": "plits",
+      "driver": "direct",
+      "name": "Plīts virsma",
+      "norm": null,
+      "opening": null,
+      "options": {
+       "augstāks": "SINT-PLITS-AUGST",
+       "standarta": "SINT-PLITS-STD"
+      },
+      "qty": 1,
+      "unit": "gab."
+     },
+     {
+      "code": "jaucejkrans",
+      "driver": "direct",
+      "name": "Jaucējkrāns",
+      "norm": null,
+      "opening": null,
+      "options": {
+       "augstāks": "SINT-SINK-AUGST",
+       "standarta": "SINT-SINK-STD"
+      },
+      "qty": 1,
+      "unit": "gab."
+     }
+    ]
+   },
+   {
+    "assumption": "sintētisks: komplekts uz mitro telpu",
+    "code": "K-SANIT",
+    "covers": [
+     "sanitārtehnik"
+    ],
+    "default_level": "standarta",
+    "group": "Sanitārtehnika",
+    "levels": [
+     "standarta",
+     "augstāks"
+    ],
+    "name": "Sanitārtehnikas komplekts",
+    "positions": [
+     {
+      "code": "wc",
+      "driver": "rooms_wet",
+      "name": "Tualetes pods",
+      "norm": 1.0,
+      "opening": null,
+      "options": {
+       "augstāks": "SINT-WC-AUGST",
+       "standarta": "SINT-WC-STD"
+      },
+      "qty": null,
+      "unit": "gab."
+     },
+     {
+      "code": "dusa",
+      "driver": "rooms_wet",
+      "name": "Dušas komplekts",
+      "norm": 1.0,
+      "opening": null,
+      "options": {
+       "augstāks": "SINT-DUSA-AUGST",
+       "standarta": "SINT-DUSA-STD"
+      },
+      "qty": null,
+      "unit": "gab."
+     }
+    ]
+   },
+   {
+    "assumption": "sintētisks: standarta izmēri; konkrēts modelis tiek precizēts PD stadijā",
+    "code": "K-LOGI",
+    "covers": [],
+    "default_level": "standarta",
+    "group": "Logi un durvis",
+    "levels": [
+     "standarta",
+     "augstāks"
+    ],
+    "name": "Logu un durvju komplekts",
+    "positions": [
+     {
+      "code": "logi",
+      "driver": "facade_win",
+      "name": "Fasādes logi",
+      "norm": 1.0,
+      "opening": "facade_win",
+      "options": {
+       "augstāks": "SINT-LOGS-AUGST",
+       "standarta": "SINT-LOGS-STD"
+      },
+      "qty": null,
+      "unit": "gab."
+     },
+     {
+      "code": "jlogi",
+      "driver": "roof_win",
+      "name": "Jumta logi",
+      "norm": 1.0,
+      "opening": "roof_win",
+      "options": {
+       "augstāks": "SINT-JLOGS-AUGST",
+       "standarta": "SINT-JLOGS-STD"
+      },
+      "qty": null,
+      "unit": "gab."
+     },
+     {
+      "code": "ardurvis",
+      "driver": "direct",
+      "name": "Ārdurvis",
+      "norm": null,
+      "opening": "door",
+      "options": {
+       "augstāks": "SINT-ARDURVIS-AUGST",
+       "standarta": "SINT-ARDURVIS-STD"
+      },
+      "qty": 1,
+      "unit": "gab."
+     }
+    ]
+   }
+  ],
+  "labour": [
+   {
+    "code": "L-LOGI",
+    "driver": "facade_win",
+    "group": "Logi un durvis",
+    "kind": "ģeometriska formula",
+    "name": "Fasādes logu un durvju montāža",
+    "norm_h": 1.5,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Apdare un montāža",
+    "status": "apstiprināts",
+    "unit": "gab."
+   },
+   {
+    "code": "L-JLOGI",
+    "driver": "roof_win",
+    "group": "Logi un durvis",
+    "kind": "ģeometriska formula",
+    "name": "Jumta logu montāža",
+    "norm_h": 2.5,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Apdare un montāža",
+    "status": "apstiprināts",
+    "unit": "gab."
+   },
+   {
+    "code": "L-VIRTUVE",
+    "driver": "kitchen_len",
+    "group": "Virtuve, mēbeles un tehnika",
+    "kind": "ģeometriska formula",
+    "name": "Virtuves montāža",
+    "norm_h": 3.0,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Apdare un montāža",
+    "status": "apstiprināts",
+    "unit": "m"
+   },
+   {
+    "code": "L-FASADE",
+    "driver": "ext_net",
+    "group": "Ārsienas",
+    "kind": "ģeometriska formula",
+    "name": "Fasādes darbi",
+    "norm_h": 0.6,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Apdare un montāža",
+    "status": "apstiprināts",
+    "unit": "m²"
+   },
+   {
+    "code": "L-SANIT",
+    "driver": "rooms_wet",
+    "group": "Sanitārtehnika",
+    "kind": "ģeometriska formula",
+    "name": "Sanitārtehnikas montāža",
+    "norm_h": 14.0,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Apdare un montāža",
+    "status": "apstiprināts",
+    "unit": "gab."
+   },
+   {
+    "code": "L-VESTURE",
+    "driver": "ext_net",
+    "group": "Ārsienas",
+    "kind": "vēsturisks koeficients",
+    "name": "Siena: vēsturiskās stundas",
+    "norm_h": 0.9,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "stage": "Ražošana",
+    "status": "vēsturisks",
+    "unit": "m²"
+   }
+  ],
+  "meta": {
+   "description": "Izdomāti dati testiem un demonstrācijai; NAV MLK standarti, cenas vai normas.",
+   "name": "Sintētiskā bibliotēka (DEMO)",
+   "synthetic": true,
+   "version": "1"
+  },
+  "recipes": [
+   {
+    "article": "SINT-LENTE",
+    "assumption": "sintētiska norma: m uz m ārsienu garuma",
+    "code": "R-LENTE",
+    "driver": "ext_len",
+    "group": "Stiprinājumi un palīgmateriāli",
+    "kind": "ģeometriska formula",
+    "name": "Hermetizācijas lente savienojumiem",
+    "norm": 3.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "m",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-LENSKAVA",
+    "assumption": "sintētiska norma: gab. uz moduli",
+    "code": "R-LENSKAVA",
+    "driver": "modules",
+    "group": "Stiprinājumi un palīgmateriāli",
+    "kind": "ģeometriska formula",
+    "name": "Leņķskavas",
+    "norm": 40.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "gab.",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-EL-NORMA",
+    "assumption": "sintētiska budžeta norma uz m² neto grīdas",
+    "code": "R-EL",
+    "driver": "floor_net",
+    "group": "Elektroinstalācija",
+    "kind": "ģeometriska formula",
+    "name": "Elektroinstalācijas materiāli (budžeta norma)",
+    "norm": 1.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "m²",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-HIDRO",
+    "assumption": "viens komplekts uz mitro telpu",
+    "code": "R-HIDRO",
+    "driver": "rooms_wet",
+    "group": "Ūdens un kanalizācija",
+    "kind": "ģeometriska formula",
+    "name": "Mitrās telpas hidroizolācija",
+    "norm": 1.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "kompl.",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-JLOGA-NOTEC",
+    "assumption": "viens komplekts uz jumta logu",
+    "code": "R-JLOGA-NOTECE",
+    "driver": "roof_win",
+    "group": "Jumts",
+    "kind": "ģeometriska formula",
+    "name": "Jumta logu apdare un noteces",
+    "norm": 1.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "kompl.",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-VENT-KOMPL",
+    "assumption": "sintētisks: rekuperācija visai ēkai; detalizācija PD stadijā",
+    "code": "R-VENT",
+    "driver": "direct",
+    "group": "Ventilācija",
+    "kind": "komplekta budžets",
+    "name": "Ventilācijas sistēma (AD budžeta komplekts)",
+    "norm": null,
+    "qty": 1.0,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "apstiprināts",
+    "unit": "kompl.",
+    "waste_pct": null
+   },
+   {
+    "article": "SINT-LENSKAVA",
+    "assumption": "sintētiska neapstiprināta norma",
+    "code": "R-NEAPST",
+    "driver": "int_len",
+    "group": "Stiprinājumi un palīgmateriāli",
+    "kind": "ģeometriska formula",
+    "name": "Papildu stiprinājumi (neapstiprināta norma)",
+    "norm": 2.0,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "neapstiprināts",
+    "unit": "gab.",
+    "waste_pct": null
+   },
+   {
+    "article": null,
+    "assumption": "sintētisks vēsturisks koeficients no iepriekšēja projekta — nav validēts",
+    "code": "R-VESTURE",
+    "driver": "ext_net",
+    "group": "Ārsienas",
+    "kind": "vēsturisks koeficients",
+    "name": "Fasādes apdares patēriņš (vēsturisks koeficients)",
+    "norm": 1.07,
+    "qty": null,
+    "source": "SINTĒTISKS (nav MLK dati)",
+    "status": "vēsturisks",
+    "unit": "m²",
+    "waste_pct": null
+   }
+  ]
+ },
+ "schema_version": 1
+}

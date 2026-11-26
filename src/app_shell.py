@@ -10,7 +10,7 @@ import pathlib
 import re
 import subprocess
 
-RELEASE_VERSION = "2026.11.26-ad-first-1"       # JĀATJAUNINA katram izlaidumam (Issue #18)
+RELEASE_VERSION = "2026.11.26-biblioteka-1"       # JĀATJAUNINA katram izlaidumam (Issue #18, #20)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 MODE_BUILDING = "Pilnas ēkas AD tāme"
