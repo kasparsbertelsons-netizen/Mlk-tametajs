@@ -319,7 +319,7 @@ class TestCoverageAndBudget(unittest.TestCase):
 
 def building_app():
     at = AppTest.from_file(APP, default_timeout=90).run()
-    at.radio[0].set_value("Pilnas ēkas tāme").run()
+    at.radio[0].set_value("Pilnas ēkas AD tāme").run()
     return at
 
 

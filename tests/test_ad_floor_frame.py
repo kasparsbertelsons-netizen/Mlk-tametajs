@@ -24,13 +24,21 @@ from streamlit.testing.v1.element_tree import FileUploader
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples" / "ad_vector"
-AD_MODE = "AD — prognozēt rāmi"
-PD_MODE = "PD — nolasīt specifikāciju"
+AD_MODE = "Vecais AD: tikai grīdas rāmis"
+PD_MODE = "PD: līmsiju specifikācija"
 
 FLOOR = "Floor plan 1:50\n12000\n4000\nKitchen 12.5 m2\nWindow 1200x1500"
 COVER = "Drawing list: Floor plan, Roof plan\nProject 15000"
 ROOF = "Roof plan 1:100\n12600\n4600"
 PD_TABLE = "Structural Frame - TOP\nTimber Element list\n 1 Glued beam / līmsija 200 240 9600 2"
+
+
+
+def legacy_app(timeout=60):
+    """Vecais AD grīdas rāmja režīms (Issue #18: noklusējums tagad ir pilnas ēkas AD tāme)."""
+    at = AppTest.from_file(APP, default_timeout=timeout).run()
+    at.radio[0].set_value("Vecais AD: tikai grīdas rāmis").run()
+    return at
 
 
 def make_pdf(pages):
@@ -49,7 +57,7 @@ def make_pdf(pages):
 
 
 def start(pages=None, mode=AD_MODE):
-    at = AppTest.from_file(APP, default_timeout=60).run()
+    at = legacy_app(60)
     if mode != AD_MODE:
         at.radio[0].set_value(mode).run()
     if pages is not None:
@@ -64,7 +72,7 @@ def sample(name):
 
 def start_bytes(data):
     """Palaiž lietotni un augšupielādē gatavu PDF (piem., paraugu no samples/ad_vector)."""
-    at = AppTest.from_file(APP, default_timeout=90).run()
+    at = legacy_app(90)
     at.file_uploader[0].upload("sample.pdf", data, "application/pdf").run()
     assert not at.exception, at.exception
     return at
@@ -267,7 +275,7 @@ class TestNoSilentWrongResults(unittest.TestCase):
         self.assertEqual(metric(at, "Sijas kopā (gab.)"), "22")
 
     def test_non_pdf_file_is_rejected(self):
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         at.file_uploader[0].upload("fake.pdf", b"this is not a pdf", "application/pdf").run()
         self.assertTrue(any("PDF neizdevās nolasīt" in e for e in errors(at)))
         self.assertEqual(metrics(at), [])
@@ -464,7 +472,7 @@ class TestConfirmationDoesNotComeBack(unittest.TestCase):
 
     def test_pdf_removed_and_same_bytes_restored(self):
         data = make_pdf([FLOOR])
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         at.file_uploader[0].upload("a.pdf", data, "application/pdf").run()
         enter(at, 0, 12000, 4000)
         self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
@@ -477,7 +485,7 @@ class TestConfirmationDoesNotComeBack(unittest.TestCase):
 
     def test_pdf_replaced_by_other_and_back(self):
         a, b = make_pdf([FLOOR]), make_pdf([FLOOR + "\nRevision B"])
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         at.file_uploader[0].upload("a.pdf", a, "application/pdf").run()
         enter(at, 0, 12000, 4000)
         at.file_uploader[0].upload("b.pdf", b, "application/pdf").run()
@@ -499,7 +507,7 @@ class TestConfirmationDoesNotComeBack(unittest.TestCase):
         # ChatGPT: identiska PDF satura tieša nomaiņa drīkst saglabāt apstiprinājumu,
         # ja avots un pārējā ievade nemainās.
         data = make_pdf([FLOOR])
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         at.file_uploader[0].upload("a.pdf", data, "application/pdf").run()
         enter(at, 0, 12000, 4000)
         at.file_uploader[0].upload("copy.pdf", data, "application/pdf").run()
@@ -526,13 +534,13 @@ class TestPdfIdentity(unittest.TestCase):
 
     def test_valid_pdf_uses_full_sha256(self):
         data = make_pdf([FLOOR])
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         pdf_id = self.upload(at, "a.pdf", data)
         self.assertEqual(len(pdf_id), 64)
         self.assertEqual(pdf_id, hashlib.sha256(data).hexdigest())
 
     def test_invalid_files_with_same_name_and_size_have_different_identity(self):
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         first = self.upload(at, "same.pdf", b"not a pdf: AAAA")
         self.assertTrue(any("PDF neizdevās nolasīt" in e for e in errors(at)))
         second = self.upload(at, "same.pdf", b"not a pdf: BBBB")       # tas pats nosaukums un izmērs
@@ -541,7 +549,7 @@ class TestPdfIdentity(unittest.TestCase):
         self.assertEqual(len(second), 64)
 
     def test_confirmation_is_cancelled_when_invalid_file_is_replaced_by_same_size_file(self):
-        at = AppTest.from_file(APP, default_timeout=60).run()
+        at = legacy_app(60)
         self.upload(at, "same.pdf", b"not a pdf: AAAA")
         enter(at, 0, 12000, 4000)                                     # izmēri ievadīti manuāli
         self.assertEqual(metric(at, "Kokmateriāli kopā"), "2.15856 m³")
@@ -551,7 +559,7 @@ class TestPdfIdentity(unittest.TestCase):
 
     def test_oversized_files_with_same_name_and_size_have_different_identity(self):
         with mock.patch("src.ad_ui.MAX_PDF_BYTES", 100):
-            at = AppTest.from_file(APP, default_timeout=60).run()
+            at = legacy_app(60)
             first = self.upload(at, "big.pdf", b"A" * 200)
             self.assertTrue(any("Maksimālais PDF izmērs" in e for e in errors(at)))
             second = self.upload(at, "big.pdf", b"B" * 200)
@@ -859,7 +867,7 @@ class TestVectorCandidatesUI(unittest.TestCase):
         self.assertEqual([(r["Kandidāts"], r["L (mm)"], r["W (mm)"]) for r in vector_table(at)], [("P1-K1", 12100, 3600)])
 
     def test_pd_mode_is_unaffected_by_vector_samples(self):
-        at = AppTest.from_file(APP, default_timeout=90).run()
+        at = legacy_app(90)
         at.radio[0].set_value(PD_MODE).run()
         at.file_uploader[0].upload("sample.pdf", sample(self.S01), "application/pdf").run()
         self.assertFalse(at.exception)

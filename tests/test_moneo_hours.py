@@ -410,7 +410,7 @@ class TestHoursComparison(MoneoBase):
 class TestUiMoneoFlow(unittest.TestCase):
     def test_moneo_and_hours_upload_flow(self):
         at = AppTest.from_file(APP, default_timeout=120).run()
-        at.radio[0].set_value("Pilnas ēkas tāme").run()
+        at.radio[0].set_value("Pilnas ēkas AD tāme").run()
         at.button(key="bp_demo_ad").click().run()
         at.button(key="bp_freeze_1").click().run()
         at.file_uploader(key="bp_ctrl_1").upload("moneo.xlsx", build_moneo_report_xlsx(), "application/octet-stream").run()
@@ -428,7 +428,7 @@ class TestUiMoneoFlow(unittest.TestCase):
 
     def test_wrong_structure_asks_for_mapping(self):
         at = AppTest.from_file(APP, default_timeout=120).run()
-        at.radio[0].set_value("Pilnas ēkas tāme").run()
+        at.radio[0].set_value("Pilnas ēkas AD tāme").run()
         at.button(key="bp_demo_ad").click().run()
         at.button(key="bp_freeze_1").click().run()
         wb = openpyxl.load_workbook(io.BytesIO(build_moneo_report_xlsx()))
